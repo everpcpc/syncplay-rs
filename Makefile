@@ -1,4 +1,4 @@
-.PHONY: bump-major bump-minor bump-patch
+.PHONY: bump-major bump-minor bump-patch format
 
 # Get current version from package.json
 CURRENT_VERSION := $(shell jq -r '.version' package.json)
@@ -7,6 +7,13 @@ CURRENT_VERSION := $(shell jq -r '.version' package.json)
 MAJOR := $(shell echo $(CURRENT_VERSION) | cut -d. -f1)
 MINOR := $(shell echo $(CURRENT_VERSION) | cut -d. -f2)
 PATCH := $(shell echo $(CURRENT_VERSION) | cut -d. -f3)
+
+format:
+	@echo "Formatting Rust code..."
+	@cd src-tauri && cargo fmt
+	@echo "Formatting frontend code..."
+	@pnpm run format
+	@echo "All code formatted successfully"
 
 bump-major:
 	@echo "Bumping major version from $(CURRENT_VERSION)"

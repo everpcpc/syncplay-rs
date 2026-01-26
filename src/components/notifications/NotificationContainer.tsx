@@ -2,9 +2,7 @@ import { useNotificationStore } from "../../store/notifications";
 
 export function NotificationContainer() {
   const notifications = useNotificationStore((state) => state.notifications);
-  const removeNotification = useNotificationStore(
-    (state) => state.removeNotification
-  );
+  const removeNotification = useNotificationStore((state) => state.removeNotification);
 
   const getNotificationStyles = (type: string) => {
     switch (type) {
@@ -45,9 +43,7 @@ export function NotificationContainer() {
         >
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-3">
-              <span className="text-xl font-bold">
-                {getNotificationIcon(notification.type)}
-              </span>
+              <span className="text-xl font-bold">{getNotificationIcon(notification.type)}</span>
               <p className="text-sm">{notification.message}</p>
             </div>
             <button

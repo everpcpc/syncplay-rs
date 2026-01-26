@@ -112,9 +112,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               <input
                 type="text"
                 value={formData.host}
-                onChange={(e) =>
-                  setFormData({ ...formData, host: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
                 className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
                 placeholder="syncplay.pl"
               />
@@ -125,24 +123,18 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               <input
                 type="number"
                 value={formData.port}
-                onChange={(e) =>
-                  setFormData({ ...formData, port: parseInt(e.target.value) })
-                }
+                onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) })}
                 className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
                 placeholder="8999"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Username *
-              </label>
+              <label className="block text-sm font-medium mb-1">Username *</label>
               <input
                 type="text"
                 value={formData.username}
-                onChange={(e) =>
-                  setFormData({ ...formData, username: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                 className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
                 placeholder="Your username"
                 required
@@ -154,24 +146,18 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               <input
                 type="text"
                 value={formData.room}
-                onChange={(e) =>
-                  setFormData({ ...formData, room: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, room: e.target.value })}
                 className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
                 placeholder="default"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Password (optional)
-              </label>
+              <label className="block text-sm font-medium mb-1">Password (optional)</label>
               <input
                 type="password"
                 value={formData.password}
-                onChange={(e) =>
-                  setFormData({ ...formData, password: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
                 placeholder="Server password"
               />

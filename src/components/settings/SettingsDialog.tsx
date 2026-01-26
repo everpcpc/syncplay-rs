@@ -90,9 +90,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               <button
                 onClick={() => setActiveTab("server")}
                 className={`px-4 py-2 ${
-                  activeTab === "server"
-                    ? "border-b-2 border-blue-500 text-white"
-                    : "text-gray-400"
+                  activeTab === "server" ? "border-b-2 border-blue-500 text-white" : "text-gray-400"
                 }`}
               >
                 Server
@@ -100,9 +98,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               <button
                 onClick={() => setActiveTab("user")}
                 className={`px-4 py-2 ${
-                  activeTab === "user"
-                    ? "border-b-2 border-blue-500 text-white"
-                    : "text-gray-400"
+                  activeTab === "user" ? "border-b-2 border-blue-500 text-white" : "text-gray-400"
                 }`}
               >
                 User
@@ -319,9 +315,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Slowdown Rate (0-1)
-                  </label>
+                  <label className="block text-sm font-medium mb-1">Slowdown Rate (0-1)</label>
                   <input
                     type="number"
                     step="0.01"

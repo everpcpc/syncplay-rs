@@ -63,17 +63,11 @@ export function ChatPanel() {
         ) : (
           messages.map((msg, index) => (
             <div key={index} className="text-sm">
-              <span className="text-gray-500 text-xs">
-                {formatTimestamp(msg.timestamp)}
-              </span>
+              <span className="text-gray-500 text-xs">{formatTimestamp(msg.timestamp)}</span>
               {msg.username && (
-                <span className="text-blue-400 font-medium ml-2">
-                  {msg.username}:
-                </span>
+                <span className="text-blue-400 font-medium ml-2">{msg.username}:</span>
               )}
-              <span className={`ml-2 ${getMessageStyle(msg.messageType)}`}>
-                {msg.message}
-              </span>
+              <span className={`ml-2 ${getMessageStyle(msg.messageType)}`}>{msg.message}</span>
             </div>
           ))
         )}
@@ -88,9 +82,7 @@ export function ChatPanel() {
           onChange={(e) => setInputValue(e.target.value)}
           onKeyPress={handleKeyPress}
           placeholder={
-            connection.connected
-              ? "Type a message... (or /help for commands)"
-              : "Not connected"
+            connection.connected ? "Type a message... (or /help for commands)" : "Not connected"
           }
           className="w-full bg-gray-800 text-white px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
           disabled={!connection.connected}
