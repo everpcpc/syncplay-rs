@@ -201,11 +201,7 @@ impl MpvIpc {
 
     /// Set pause state
     pub async fn set_paused(&self, paused: bool) -> Result<()> {
-        let cmd = MpvCommand::set_property(
-            "pause",
-            serde_json::Value::Bool(paused),
-            0,
-        );
+        let cmd = MpvCommand::set_property("pause", serde_json::Value::Bool(paused), 0);
         self.send_command_async(cmd).await?;
         Ok(())
     }

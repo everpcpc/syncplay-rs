@@ -59,10 +59,7 @@ impl Playlist {
     /// Set playlist items (replaces entire playlist)
     pub fn set_items(&self, items: Vec<String>) {
         info!("Setting playlist with {} items", items.len());
-        let playlist_items: Vec<PlaylistItem> = items
-            .into_iter()
-            .map(PlaylistItem::new)
-            .collect();
+        let playlist_items: Vec<PlaylistItem> = items.into_iter().map(PlaylistItem::new).collect();
 
         *self.items.write() = playlist_items;
 
@@ -95,7 +92,10 @@ impl Playlist {
             return false;
         }
 
-        info!("Removing item at index {}: {}", index, items[index].filename);
+        info!(
+            "Removing item at index {}: {}",
+            index, items[index].filename
+        );
         items.remove(index);
 
         // Adjust current index if needed
@@ -126,7 +126,10 @@ impl Playlist {
             return false;
         }
 
-        info!("Setting current index to {}: {}", index, items[index].filename);
+        info!(
+            "Setting current index to {}: {}",
+            index, items[index].filename
+        );
         *self.current_index.write() = Some(index);
         true
     }

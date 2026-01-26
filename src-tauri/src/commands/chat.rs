@@ -32,7 +32,9 @@ pub async fn send_chat_message(
                     .iter()
                     .map(|u| format!("{} ({})", u.username, u.room))
                     .collect();
-                state.chat.add_system_message(format!("Users: {}", user_list.join(", ")));
+                state
+                    .chat
+                    .add_system_message(format!("Users: {}", user_list.join(", ")));
             }
             ChatCommand::Help => {
                 tracing::info!("Command: Show help");

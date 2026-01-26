@@ -3,12 +3,12 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-mod network;
-mod player;
+mod app_state;
 mod client;
 mod commands;
 mod config;
-mod app_state;
+mod network;
+mod player;
 
 use app_state::AppState;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

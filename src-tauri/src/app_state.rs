@@ -3,12 +3,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
-use crate::client::{
-    chat::ChatManager,
-    playlist::Playlist,
-    state::ClientState,
-    sync::SyncEngine,
-};
+use crate::client::{chat::ChatManager, playlist::Playlist, state::ClientState, sync::SyncEngine};
 use crate::network::connection::Connection;
 use crate::player::mpv_ipc::MpvIpc;
 

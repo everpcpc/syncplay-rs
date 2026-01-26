@@ -90,8 +90,7 @@ impl SyncEngine {
                 // We're ahead, need to seek backward
                 info!(
                     "Ahead by {:.2}s (threshold: {:.2}s) - seeking backward",
-                    diff,
-                    SEEK_THRESHOLD_FASTFORWARD
+                    diff, SEEK_THRESHOLD_FASTFORWARD
                 );
                 actions.push(SyncAction::Seek(adjusted_global_position));
                 self.slowdown_active = false;

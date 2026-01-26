@@ -1,5 +1,5 @@
-pub mod settings;
 pub mod persistence;
+pub mod settings;
 
-pub use settings::{ServerConfig, UserPreferences, SyncplayConfig};
-pub use persistence::{load_config, save_config, get_config_path};
+pub use persistence::{get_config_path, load_config, save_config};
+pub use settings::{ServerConfig, SyncplayConfig, UserPreferences};
