@@ -22,24 +22,24 @@ Syncplay Tauri is a complete rewrite of the Syncplay client using modern technol
 ### Prerequisites
 
 - **Rust**: 1.70 or later
-- **Node.js**: 18 or later
+- **Node.js**: 24 or later
 - **MPV**: Latest version with JSON IPC support
 
 ### Development
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Run in development mode
-npm run tauri dev
+pnpm run tauri dev
 ```
 
 ### Building
 
 ```bash
 # Build for production
-npm run tauri build
+pnpm run tauri build
 
 # Run tests
 cd src-tauri && cargo test
@@ -201,7 +201,7 @@ cargo fmt
 cargo clippy
 
 # TypeScript checking
-npm run type-check
+pnpm run type-check
 ```
 
 ## Protocol Compatibility

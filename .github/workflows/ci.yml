@@ -23,8 +23,13 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
-        cache: 'npm'
+        node-version: '24'
+        cache: 'pnpm'
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: 8
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
@@ -42,8 +47,11 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup2.4-dev libjavascriptcoregtk-4.1-dev
 
-    - name: Install npm dependencies
-      run: npm ci
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Build frontend
+      run: pnpm run build
 
     - name: Run Rust tests
       run: cd src-tauri && cargo test --verbose
@@ -54,8 +62,5 @@ jobs:
     - name: Check Rust formatting
       run: cd src-tauri && cargo fmt -- --check
 
-    - name: Build frontend
-      run: npm run build
-
     - name: Build Tauri app
-      run: npm run tauri build
+      run: pnpm run tauri build
