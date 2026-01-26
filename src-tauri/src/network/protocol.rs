@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use bytes::BytesMut;
 use serde_json;
 use tokio_util::codec::{Decoder, Encoder, LinesCodec};
-use bytes::BytesMut;
 
 use super::messages::ProtocolMessage;
 
@@ -42,8 +42,8 @@ impl Decoder for SyncplayCodec {
         }
 
         // Parse JSON
-        let message: ProtocolMessage = serde_json::from_str(&line)
-            .context("Failed to parse protocol message")?;
+        let message: ProtocolMessage =
+            serde_json::from_str(&line).context("Failed to parse protocol message")?;
 
         tracing::debug!("Received: {}", line);
         Ok(Some(message))
@@ -55,8 +55,7 @@ impl Encoder<ProtocolMessage> for SyncplayCodec {
 
     fn encode(&mut self, item: ProtocolMessage, dst: &mut BytesMut) -> Result<()> {
         // Serialize to JSON
-        let json = serde_json::to_string(&item)
-            .context("Failed to serialize protocol message")?;
+        let json = serde_json::to_string(&item).context("Failed to serialize protocol message")?;
 
         tracing::debug!("Sending: {}", json);
 

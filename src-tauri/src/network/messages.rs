@@ -4,14 +4,30 @@ use std::collections::HashMap;
 /// Main protocol message envelope
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(non_snake_case)]
 pub enum ProtocolMessage {
-    Hello { Hello: HelloMessage },
-    Set { Set: SetMessage },
-    State { State: StateMessage },
-    List { List: Option<ListResponse> },
-    Chat { Chat: ChatMessage },
-    Error { Error: ErrorMessage },
-    TLS { TLS: TLSMessage },
+    Hello {
+        Hello: HelloMessage,
+    },
+    Set {
+        Set: SetMessage,
+    },
+    State {
+        State: StateMessage,
+    },
+    List {
+        List: Option<ListResponse>,
+    },
+    Chat {
+        Chat: ChatMessage,
+    },
+    Error {
+        Error: ErrorMessage,
+    },
+    #[allow(clippy::upper_case_acronyms)]
+    TLS {
+        TLS: TLSMessage,
+    },
 }
 
 /// Hello message - initial handshake
@@ -206,4 +222,3 @@ pub struct TLSMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_tls: Option<String>,
 }
-

@@ -105,7 +105,10 @@ impl ChatCommand {
             "/help" | "/h" | "/?" => Some(ChatCommand::Help),
             "/ready" => Some(ChatCommand::Ready),
             "/unready" => Some(ChatCommand::Unready),
-            _ => Some(ChatCommand::Unknown(format!("Unknown command: {}", command))),
+            _ => Some(ChatCommand::Unknown(format!(
+                "Unknown command: {}",
+                command
+            ))),
         }
     }
 

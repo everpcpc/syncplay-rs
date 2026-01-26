@@ -74,10 +74,7 @@ export function MainLayout() {
       />
 
       {/* Settings dialog */}
-      <SettingsDialog
-        isOpen={showSettingsDialog}
-        onClose={() => setShowSettingsDialog(false)}
-      />
+      <SettingsDialog isOpen={showSettingsDialog} onClose={() => setShowSettingsDialog(false)} />
     </div>
   );
 }

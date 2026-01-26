@@ -1,11 +1,11 @@
-pub mod connection;
 pub mod chat;
-pub mod room;
-pub mod playlist;
 pub mod config;
+pub mod connection;
+pub mod playlist;
+pub mod room;
 
-pub use connection::*;
 pub use chat::*;
-pub use room::*;
-pub use playlist::*;
 pub use config::*;
+pub use connection::*;
+pub use playlist::*;
+pub use room::*;

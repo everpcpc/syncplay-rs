@@ -14,7 +14,13 @@ pub async fn connect_to_server(
     _password: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    tracing::info!("Connecting to {}:{} as {} in room {}", host, port, username, room);
+    tracing::info!(
+        "Connecting to {}:{} as {} in room {}",
+        host,
+        port,
+        username,
+        room
+    );
 
     // Check if already connected
     if state.is_connected() {

@@ -135,7 +135,8 @@ impl SyncplayConfig {
     /// Add a server to recent servers list
     pub fn add_recent_server(&mut self, server: ServerConfig) {
         // Remove duplicates
-        self.recent_servers.retain(|s| s.host != server.host || s.port != server.port);
+        self.recent_servers
+            .retain(|s| s.host != server.host || s.port != server.port);
 
         // Add to front
         self.recent_servers.insert(0, server);

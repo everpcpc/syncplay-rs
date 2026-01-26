@@ -4,8 +4,8 @@
 use super::settings::{ServerConfig, SyncplayConfig, UserPreferences};
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 /// Get the configuration file path
 pub fn get_config_path() -> Result<PathBuf> {
@@ -13,8 +13,7 @@ pub fn get_config_path() -> Result<PathBuf> {
         .context("Failed to determine project directories")?;
 
     let config_dir = proj_dirs.config_dir();
-    fs::create_dir_all(config_dir)
-        .context("Failed to create config directory")?;
+    fs::create_dir_all(config_dir).context("Failed to create config directory")?;
 
     Ok(config_dir.join("config.json"))
 }
@@ -28,11 +27,10 @@ pub fn load_config() -> Result<SyncplayConfig> {
         return Ok(SyncplayConfig::default());
     }
 
-    let contents = fs::read_to_string(&config_path)
-        .context("Failed to read config file")?;
+    let contents = fs::read_to_string(&config_path).context("Failed to read config file")?;
 
-    let config: SyncplayConfig = serde_json::from_str(&contents)
-        .context("Failed to parse config file")?;
+    let config: SyncplayConfig =
+        serde_json::from_str(&contents).context("Failed to parse config file")?;
 
     tracing::info!("Loaded config from {:?}", config_path);
     Ok(config)
@@ -42,11 +40,9 @@ pub fn load_config() -> Result<SyncplayConfig> {
 pub fn save_config(config: &SyncplayConfig) -> Result<()> {
     let config_path = get_config_path()?;
 
-    let contents = serde_json::to_string_pretty(config)
-        .context("Failed to serialize config")?;
+    let contents = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
 
-    fs::write(&config_path, contents)
-        .context("Failed to write config file")?;
+    fs::write(&config_path, contents).context("Failed to write config file")?;
 
     tracing::info!("Saved config to {:?}", config_path);
     Ok(())
@@ -98,4 +94,3 @@ mod tests {
         assert_eq!(config.server.host, "syncplay.pl");
     }
 }
-

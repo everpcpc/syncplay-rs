@@ -3,9 +3,7 @@ import { MainLayout } from "./components/layout/MainLayout";
 import { useSyncplayStore } from "./store";
 
 function App() {
-  const setupEventListeners = useSyncplayStore(
-    (state) => state.setupEventListeners
-  );
+  const setupEventListeners = useSyncplayStore((state) => state.setupEventListeners);
 
   useEffect(() => {
     setupEventListeners();
