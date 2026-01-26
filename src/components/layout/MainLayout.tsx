@@ -5,6 +5,7 @@ import { PlayerStatus } from "../player/PlayerStatus";
 import { PlaylistPanel } from "../playlist/PlaylistPanel";
 import { ConnectionDialog } from "../connection/ConnectionDialog";
 import { SettingsDialog } from "../settings/SettingsDialog";
+import { NotificationContainer } from "../notifications/NotificationContainer";
 
 export function MainLayout() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
@@ -13,6 +14,7 @@ export function MainLayout() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white">
+      <NotificationContainer />
       {/* Header */}
       <header className="bg-gray-800 p-4 border-b border-gray-700">
         <div className="flex items-center justify-between">

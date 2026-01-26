@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSyncplayStore } from "../../store";
+import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api";
 
 interface ConnectionDialogProps {
@@ -9,6 +10,7 @@ interface ConnectionDialogProps {
 
 export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   const connection = useSyncplayStore((state) => state.connection);
+  const addNotification = useNotificationStore((state) => state.addNotification);
   const [formData, setFormData] = useState({
     host: "syncplay.pl",
     port: 8999,
@@ -38,9 +40,17 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
         room: formData.room,
         password: formData.password || null,
       });
+      addNotification({
+        type: "success",
+        message: `Connected to ${formData.host}:${formData.port}`,
+      });
       onClose();
     } catch (err) {
       setError(err as string);
+      addNotification({
+        type: "error",
+        message: `Connection failed: ${err}`,
+      });
     } finally {
       setIsConnecting(false);
     }
@@ -49,6 +59,10 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   const handleDisconnect = async () => {
     try {
       await invoke("disconnect_from_server");
+      addNotification({
+        type: "info",
+        message: "Disconnected from server",
+      });
       onClose();
     } catch (err) {
       setError(err as string);
