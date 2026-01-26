@@ -1,1 +1,2 @@
-// Placeholder for playlist module
+// Playlist management module
+// Handles shared playlist functionality

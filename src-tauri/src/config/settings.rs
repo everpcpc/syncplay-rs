@@ -1,1 +1,2 @@
-// Placeholder for settings module
+// Settings module
+// Configuration structures and defaults

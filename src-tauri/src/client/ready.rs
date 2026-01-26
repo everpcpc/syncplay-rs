@@ -1,1 +1,2 @@
-// Placeholder for ready state module
+// Ready state management module
+// Handles user ready states for synchronized playback start

@@ -1,1 +1,162 @@
-// Placeholder for client state module
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// User information
+#[derive(Debug, Clone)]
+pub struct User {
+    pub username: String,
+    pub room: String,
+    pub file: Option<String>,
+    pub is_ready: bool,
+    pub is_controller: bool,
+}
+
+/// Global playback state
+#[derive(Debug, Clone)]
+pub struct GlobalPlayState {
+    pub position: f64,
+    pub paused: bool,
+    pub set_by: Option<String>,
+}
+
+/// Client global state
+pub struct ClientState {
+    /// Current username
+    username: RwLock<String>,
+    /// Current room
+    room: RwLock<String>,
+    /// Current file
+    file: RwLock<Option<String>>,
+    /// User list (username -> User)
+    users: RwLock<HashMap<String, User>>,
+    /// Global playback state
+    global_state: RwLock<GlobalPlayState>,
+    /// Local ready state
+    is_ready: RwLock<bool>,
+    /// Server version
+    server_version: RwLock<Option<String>>,
+}
+
+impl ClientState {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            username: RwLock::new(String::new()),
+            room: RwLock::new(String::new()),
+            file: RwLock::new(None),
+            users: RwLock::new(HashMap::new()),
+            global_state: RwLock::new(GlobalPlayState {
+                position: 0.0,
+                paused: true,
+                set_by: None,
+            }),
+            is_ready: RwLock::new(false),
+            server_version: RwLock::new(None),
+        })
+    }
+
+    // Username methods
+    pub fn get_username(&self) -> String {
+        self.username.read().clone()
+    }
+
+    pub fn set_username(&self, username: String) {
+        *self.username.write() = username;
+    }
+
+    // Room methods
+    pub fn get_room(&self) -> String {
+        self.room.read().clone()
+    }
+
+    pub fn set_room(&self, room: String) {
+        *self.room.write() = room;
+    }
+
+    // File methods
+    pub fn get_file(&self) -> Option<String> {
+        self.file.read().clone()
+    }
+
+    pub fn set_file(&self, file: Option<String>) {
+        *self.file.write() = file;
+    }
+
+    // User list methods
+    pub fn add_user(&self, user: User) {
+        self.users.write().insert(user.username.clone(), user);
+    }
+
+    pub fn remove_user(&self, username: &str) {
+        self.users.write().remove(username);
+    }
+
+    pub fn get_user(&self, username: &str) -> Option<User> {
+        self.users.read().get(username).cloned()
+    }
+
+    pub fn get_users(&self) -> Vec<User> {
+        self.users.read().values().cloned().collect()
+    }
+
+    pub fn get_users_in_room(&self, room: &str) -> Vec<User> {
+        self.users
+            .read()
+            .values()
+            .filter(|u| u.room == room)
+            .cloned()
+            .collect()
+    }
+
+    pub fn clear_users(&self) {
+        self.users.write().clear();
+    }
+
+    // Global state methods
+    pub fn get_global_state(&self) -> GlobalPlayState {
+        self.global_state.read().clone()
+    }
+
+    pub fn set_global_state(&self, position: f64, paused: bool, set_by: Option<String>) {
+        let mut state = self.global_state.write();
+        state.position = position;
+        state.paused = paused;
+        state.set_by = set_by;
+    }
+
+    // Ready state methods
+    pub fn is_ready(&self) -> bool {
+        *self.is_ready.read()
+    }
+
+    pub fn set_ready(&self, ready: bool) {
+        *self.is_ready.write() = ready;
+    }
+
+    // Server version methods
+    pub fn get_server_version(&self) -> Option<String> {
+        self.server_version.read().clone()
+    }
+
+    pub fn set_server_version(&self, version: String) {
+        *self.server_version.write() = Some(version);
+    }
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        Self {
+            username: RwLock::new(String::new()),
+            room: RwLock::new(String::new()),
+            file: RwLock::new(None),
+            users: RwLock::new(HashMap::new()),
+            global_state: RwLock::new(GlobalPlayState {
+                position: 0.0,
+                paused: true,
+                set_by: None,
+            }),
+            is_ready: RwLock::new(false),
+            server_version: RwLock::new(None),
+        }
+    }
+}

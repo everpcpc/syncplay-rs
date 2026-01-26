@@ -1,1 +1,2 @@
-// Placeholder for persistence module
+// Persistence module
+// Configuration file I/O
