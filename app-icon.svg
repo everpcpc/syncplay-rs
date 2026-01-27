@@ -12,4 +12,14 @@
         </linearGradient>
         <polygon id="base-triangle" points="-70,-110 130,0 -70,110"></polygon>
     </defs>
+    <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <use fill="#FFFFFF" xlink:href="#squircle-shape"></use>
+        <g transform="translate(512.000000, 512.000000)">
+            <circle fill="url(#grad-left-vertical)" opacity="0.85" cx="-150" cy="0" r="300"></circle>
+            <circle fill="url(#grad-right-vertical)" opacity="0.85"  cx="150" cy="0" r="300"></circle>
+            <g transform="translate(-5, 0) scale(0.82)">
+                <use xlink:href="#base-triangle" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="45" stroke-linejoin="round"></use>
+            </g>
+        </g>
+    </g>
 </svg>
