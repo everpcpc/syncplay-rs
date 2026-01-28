@@ -132,6 +132,8 @@ pub struct UserPreferences {
     pub loop_at_end_of_playlist: bool,
     pub loop_single_files: bool,
     pub show_playlist: bool,
+    #[serde(default = "default_side_panel_layout")]
+    pub side_panel_layout: String,
     pub auto_connect: bool,
     pub force_gui_prompt: bool,
     pub check_for_updates_automatically: Option<bool>,
@@ -247,6 +249,7 @@ impl Default for UserPreferences {
             loop_at_end_of_playlist: false,
             loop_single_files: false,
             show_playlist: true,
+            side_panel_layout: default_side_panel_layout(),
             auto_connect: false,
             force_gui_prompt: true,
             check_for_updates_automatically: None,
@@ -254,6 +257,10 @@ impl Default for UserPreferences {
             debug: false,
         }
     }
+}
+
+fn default_side_panel_layout() -> String {
+    "rows".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

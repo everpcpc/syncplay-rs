@@ -1,14 +1,28 @@
 import { useSyncplayStore } from "../../store";
-import { FiChevronLeft, FiChevronRight, FiPlus, FiTrash2, FiX } from "react-icons/fi";
+import {
+  FiChevronLeft,
+  FiChevronRight,
+  FiFolder,
+  FiList,
+  FiPlus,
+  FiShield,
+  FiTrash2,
+  FiX,
+} from "react-icons/fi";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { SyncplayConfig } from "../../types/config";
+import { useState } from "react";
+import { MediaDirectoriesDialog } from "./MediaDirectoriesDialog";
+import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
 
 export function PlaylistPanel() {
   const playlist = useSyncplayStore((state) => state.playlist);
   const connection = useSyncplayStore((state) => state.connection);
   const addNotification = useNotificationStore((state) => state.addNotification);
+  const [showMediaDirectories, setShowMediaDirectories] = useState(false);
+  const [showTrustedDomains, setShowTrustedDomains] = useState(false);
 
   const normalizePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -128,26 +142,48 @@ export function PlaylistPanel() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-4 border-b app-divider app-surface">
-        <h2 className="text-lg font-semibold mb-2">Playlist</h2>
-        <div className="flex gap-2">
-          <button
-            onClick={handleAddFile}
-            disabled={!connection.connected}
-            className="btn-primary app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
-            title="Add file"
-            aria-label="Add file"
-          >
-            <FiPlus className="app-icon" />
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={!connection.connected || playlist.items.length === 0}
-            className="btn-danger app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
-            title="Clear playlist"
-            aria-label="Clear playlist"
-          >
-            <FiTrash2 className="app-icon" />
-          </button>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <FiList className="app-icon app-text-muted" />
+            <div className="flex items-center gap-2 flex-1">
+              <button
+                onClick={handleAddFile}
+                disabled={!connection.connected}
+                className="btn-primary app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Add file"
+                aria-label="Add file"
+              >
+                <FiPlus className="app-icon" />
+              </button>
+              <button
+                onClick={handleClear}
+                disabled={!connection.connected || playlist.items.length === 0}
+                className="btn-danger app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Clear playlist"
+                aria-label="Clear playlist"
+              >
+                <FiTrash2 className="app-icon" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowTrustedDomains(true)}
+                className="btn-neutral app-icon-button"
+                title="Manage trusted domains"
+                aria-label="Manage trusted domains"
+              >
+                <FiShield className="app-icon" />
+              </button>
+              <button
+                onClick={() => setShowMediaDirectories(true)}
+                className="btn-neutral app-icon-button"
+                title="Manage media directories"
+                aria-label="Manage media directories"
+              >
+                <FiFolder className="app-icon" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -215,6 +251,15 @@ export function PlaylistPanel() {
           </button>
         </div>
       </div>
+
+      <MediaDirectoriesDialog
+        isOpen={showMediaDirectories}
+        onClose={() => setShowMediaDirectories(false)}
+      />
+      <TrustedDomainsDialog
+        isOpen={showTrustedDomains}
+        onClose={() => setShowTrustedDomains(false)}
+      />
     </div>
   );
 }

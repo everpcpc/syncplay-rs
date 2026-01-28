@@ -10,7 +10,7 @@ PATCH := $(shell echo $(CURRENT_VERSION) | cut -d. -f3)
 
 run:
 	@echo "Starting Syncplay Tauri in development mode..."
-	@pnpm tauri dev
+	@pnpm tauri dev 2>&1 | tee debug.log
 
 install:
 	@echo "Installing frontend dependencies..."

@@ -8,11 +8,10 @@ use crate::network::messages::{
     TLSMessage, UserUpdate,
 };
 use crate::network::tls::create_tls_connector;
-use crate::player::controller::{ensure_player_connected, load_media_by_name};
+use crate::player::controller::{ensure_player_connected, load_media_by_name, stop_player};
 use crate::player::properties::PlayerState;
 use crate::utils::same_filename;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Runtime, State};
 use tokio::time::{sleep, Duration};
 
@@ -67,7 +66,7 @@ pub async fn connect_to_server<R: Runtime>(
                     password: None,
                 }),
                 version: "1.2.255".to_string(),
-                realversion: "1.7.3".to_string(),
+                realversion: "1.7.4".to_string(),
                 features: Some(ClientFeatures {
                     shared_playlists: Some(config.user.shared_playlist_enabled),
                     chat: Some(true),
@@ -215,25 +214,28 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
         }
         ProtocolMessage::State { State: state_msg } => {
             tracing::info!("Received state update: {:?}", state_msg);
-            let message_age = state_msg
-                .ping
-                .as_ref()
-                .and_then(|p| p.server_rtt)
-                .map(|rtt| rtt / 2.0)
-                .unwrap_or(0.0);
+            let mut message_age = 0.0;
             if let Some(ping) = state_msg.ping.as_ref() {
+                if let (Some(client_latency), Some(server_rtt)) =
+                    (ping.client_latency_calculation, ping.server_rtt)
+                {
+                    state
+                        .ping_service
+                        .lock()
+                        .receive_message(client_latency, server_rtt);
+                    message_age = state.ping_service.lock().get_last_forward_delay();
+                }
+                *state.last_latency_calculation.lock() = ping.latency_calculation;
                 if let Some(connection) = state.connection.lock().clone() {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs_f64();
+                    let now = crate::network::ping::PingService::new_timestamp();
+                    let client_rtt = state.ping_service.lock().get_rtt();
                     let response = ProtocolMessage::State {
                         State: StateMessage {
                             playstate: None,
                             ping: Some(crate::network::messages::PingInfo {
                                 latency_calculation: ping.latency_calculation,
                                 client_latency_calculation: Some(now),
-                                client_rtt: None,
+                                client_rtt: Some(client_rtt),
                                 server_rtt: None,
                             }),
                             ignoring_on_the_fly: None,
@@ -785,6 +787,10 @@ pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(
     // Disconnect
     if let Some(connection) = state.connection.lock().take() {
         connection.disconnect();
+    }
+
+    if let Err(e) = stop_player(state.inner()).await {
+        tracing::warn!("Failed to stop player: {}", e);
     }
 
     state.client_state.clear_users();

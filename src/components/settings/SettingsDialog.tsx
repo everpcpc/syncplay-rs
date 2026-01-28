@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getAppliedTheme } from "../../services/theme";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChatInputPosition,
   ChatOutputMode,
@@ -54,9 +53,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("connection");
   const [detectedPlayers, setDetectedPlayers] = useState<DetectedPlayer[]>([]);
   const [detectingPlayers, setDetectingPlayers] = useState(false);
-  const [mediaDirectoryInput, setMediaDirectoryInput] = useState("");
-  const [roomListInput, setRoomListInput] = useState("");
-  const [trustedDomainInput, setTrustedDomainInput] = useState("");
   const [serverAddress, setServerAddress] = useState("");
   const [serverAddressError, setServerAddressError] = useState<string | null>(null);
   const [playerArgsInput, setPlayerArgsInput] = useState("");
@@ -148,121 +144,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           }
         : prev
     );
-  };
-
-  const addMediaDirectoryValue = (value: string) => {
-    if (!config) return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    if (config.player.media_directories.includes(trimmed)) {
-      setMediaDirectoryInput("");
-      return;
-    }
-    setConfig({
-      ...config,
-      player: {
-        ...config.player,
-        media_directories: [...config.player.media_directories, trimmed],
-      },
-    });
-    setMediaDirectoryInput("");
-  };
-
-  const addMediaDirectory = () => {
-    addMediaDirectoryValue(mediaDirectoryInput);
-  };
-
-  const addMediaDirectoryFromPicker = async () => {
-    if (!config) return;
-    setError(null);
-    let selected: string | string[] | null = null;
-    try {
-      const fallbackPath =
-        config.player.media_directories[config.player.media_directories.length - 1];
-      selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: fallbackPath,
-      });
-    } catch (err) {
-      setError("Failed to open directory picker");
-      return;
-    }
-
-    if (!selected || Array.isArray(selected)) {
-      return;
-    }
-
-    addMediaDirectoryValue(selected);
-  };
-
-  const removeMediaDirectory = (dir: string) => {
-    if (!config) return;
-    setConfig({
-      ...config,
-      player: {
-        ...config.player,
-        media_directories: config.player.media_directories.filter((entry) => entry !== dir),
-      },
-    });
-  };
-
-  const addRoomEntry = () => {
-    if (!config) return;
-    const trimmed = roomListInput.trim();
-    if (!trimmed) return;
-    if (config.user.room_list.includes(trimmed)) {
-      setRoomListInput("");
-      return;
-    }
-    setConfig({
-      ...config,
-      user: {
-        ...config.user,
-        room_list: [...config.user.room_list, trimmed],
-      },
-    });
-    setRoomListInput("");
-  };
-
-  const removeRoomEntry = (room: string) => {
-    if (!config) return;
-    setConfig({
-      ...config,
-      user: {
-        ...config.user,
-        room_list: config.user.room_list.filter((entry) => entry !== room),
-      },
-    });
-  };
-
-  const addTrustedDomain = () => {
-    if (!config) return;
-    const trimmed = trustedDomainInput.trim();
-    if (!trimmed) return;
-    if (config.user.trusted_domains.includes(trimmed)) {
-      setTrustedDomainInput("");
-      return;
-    }
-    setConfig({
-      ...config,
-      user: {
-        ...config.user,
-        trusted_domains: [...config.user.trusted_domains, trimmed],
-      },
-    });
-    setTrustedDomainInput("");
-  };
-
-  const removeTrustedDomain = (domain: string) => {
-    if (!config) return;
-    setConfig({
-      ...config,
-      user: {
-        ...config.user,
-        trusted_domains: config.user.trusted_domains.filter((entry) => entry !== domain),
-      },
-    });
   };
 
   const updatePlayerArguments = (value: string) => {
@@ -414,68 +295,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Default Room</label>
-                  <input
-                    type="text"
-                    value={config.user.default_room}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, default_room: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Room List</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={roomListInput}
-                      onChange={(e) => setRoomListInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          addRoomEntry();
-                        }
-                      }}
-                      className="flex-1 app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                      placeholder="Add a room"
-                    />
-                    <button
-                      type="button"
-                      onClick={addRoomEntry}
-                      className="btn-primary px-3 py-2 rounded text-sm"
-                    >
-                      Add
-                    </button>
-                  </div>
-                  {config.user.room_list.length === 0 ? (
-                    <p className="text-xs app-text-muted mt-2">No rooms saved.</p>
-                  ) : (
-                    <div className="mt-2 space-y-2">
-                      {config.user.room_list.map((room) => (
-                        <div
-                          key={room}
-                          className="flex items-center justify-between app-panel-muted px-3 py-2 rounded"
-                        >
-                          <span className="text-sm truncate">{room}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeRoomEntry(room)}
-                            className="text-xs app-text-danger hover:opacity-80"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
                 <div className="flex flex-col gap-2">
                   <label className="flex items-center gap-2 text-sm">
                     <input
@@ -611,63 +430,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     }
                     className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Media Directories</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={mediaDirectoryInput}
-                      onChange={(e) => setMediaDirectoryInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          addMediaDirectory();
-                        }
-                      }}
-                      className="flex-1 app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                      placeholder="/path/to/media"
-                    />
-                    <button
-                      type="button"
-                      onClick={addMediaDirectory}
-                      className="btn-primary px-3 py-2 rounded text-sm"
-                    >
-                      Add
-                    </button>
-                    <button
-                      type="button"
-                      onClick={addMediaDirectoryFromPicker}
-                      className="btn-neutral px-3 py-2 rounded text-sm"
-                    >
-                      Browse
-                    </button>
-                  </div>
-                  {config.player.media_directories.length === 0 ? (
-                    <p className="text-xs app-text-muted mt-2">No media directories added.</p>
-                  ) : (
-                    <div className="mt-2 space-y-2">
-                      {config.player.media_directories.map((dir) => (
-                        <div
-                          key={dir}
-                          className="flex items-center justify-between app-panel-muted px-3 py-2 rounded"
-                        >
-                          <span className="text-sm truncate">{dir}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeMediaDirectory(dir)}
-                            className="text-xs app-text-danger hover:opacity-80"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-xs app-text-muted mt-2">
-                    Files are matched locally against these directories.
-                  </p>
                 </div>
 
                 <div className="flex flex-col gap-2">
@@ -1039,71 +801,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                       </option>
                     ))}
                   </select>
-                </div>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={config.user.only_switch_to_trusted_domains}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: {
-                          ...config.user,
-                          only_switch_to_trusted_domains: e.target.checked,
-                        },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  Only switch to trusted domains
-                </label>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Trusted domains</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={trustedDomainInput}
-                      onChange={(e) => setTrustedDomainInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          addTrustedDomain();
-                        }
-                      }}
-                      className="flex-1 app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                      placeholder="youtube.com"
-                    />
-                    <button
-                      type="button"
-                      onClick={addTrustedDomain}
-                      className="btn-primary px-3 py-2 rounded text-sm"
-                    >
-                      Add
-                    </button>
-                  </div>
-                  {config.user.trusted_domains.length === 0 ? (
-                    <p className="text-xs app-text-muted mt-2">No trusted domains added.</p>
-                  ) : (
-                    <div className="mt-2 space-y-2">
-                      {config.user.trusted_domains.map((domain) => (
-                        <div
-                          key={domain}
-                          className="flex items-center justify-between app-panel-muted px-3 py-2 rounded"
-                        >
-                          <span className="text-sm truncate">{domain}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeTrustedDomain(domain)}
-                            className="text-xs app-text-danger hover:opacity-80"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             )}

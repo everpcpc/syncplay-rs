@@ -39,7 +39,7 @@ impl PlayerBackend for MpvBackend {
     }
 
     async fn poll_state(&self) -> anyhow::Result<()> {
-        Ok(())
+        self.ipc.refresh_state().await
     }
 
     async fn set_position(&self, position: f64) -> anyhow::Result<()> {

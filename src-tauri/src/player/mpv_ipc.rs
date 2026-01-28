@@ -168,6 +168,28 @@ impl MpvIpc {
         Ok(())
     }
 
+    /// Refresh properties via direct queries
+    pub async fn refresh_state(&self) -> Result<()> {
+        let properties = [
+            PropertyId::TimePos,
+            PropertyId::Pause,
+            PropertyId::Filename,
+            PropertyId::Duration,
+            PropertyId::Path,
+            PropertyId::Speed,
+        ];
+
+        for prop in properties {
+            let cmd = MpvCommand::get_property(prop.property_name(), 0);
+            let response = self.send_command_async(cmd).await?;
+            if let Some(data) = response.data {
+                self.state.lock().update_property(prop, &data);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Send a command without waiting for response
     fn send_command(&self, cmd: MpvCommand) -> Result<()> {
         if let Some(tx) = &self.tx {

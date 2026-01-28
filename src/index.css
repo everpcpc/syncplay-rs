@@ -419,6 +419,12 @@
   color: var(--app-text);
 }
 
+.app-tag-muted {
+  background-color: var(--app-panel-2);
+  border: 1px solid var(--app-border);
+  color: var(--app-muted);
+}
+
 .app-item-active {
   background-color: var(--app-accent-soft);
   border: 1px solid var(--app-accent);
