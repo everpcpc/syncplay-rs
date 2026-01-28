@@ -1,4 +1,5 @@
 export type ThemePreference = "dark" | "light";
+export type TransparencyPreference = "off" | "low" | "high";
 
 export const normalizeTheme = (value?: string): ThemePreference =>
   value === "light" ? "light" : "dark";
@@ -10,9 +11,19 @@ export const applyTheme = (value?: string) => {
   root.classList.toggle("theme-dark", theme !== "light");
 };
 
-export const applyTransparency = (reduceTransparency?: boolean) => {
+export const normalizeTransparency = (value?: string): TransparencyPreference => {
+  if (value === "high") return "high";
+  if (value === "low") return "low";
+  return "off";
+};
+
+export const applyTransparency = (value?: string) => {
   const root = document.documentElement;
-  root.classList.toggle("reduced-transparency", Boolean(reduceTransparency));
+  const mode = normalizeTransparency(value);
+  root.classList.remove("reduced-transparency");
+  root.classList.toggle("transparency-off", mode === "off");
+  root.classList.toggle("transparency-low", mode === "low");
+  root.classList.toggle("transparency-high", mode === "high");
 };
 
 export const getAppliedTheme = (): ThemePreference => {
@@ -20,7 +31,9 @@ export const getAppliedTheme = (): ThemePreference => {
   return root.classList.contains("theme-light") ? "light" : "dark";
 };
 
-export const getAppliedTransparency = (): boolean => {
+export const getAppliedTransparency = (): TransparencyPreference => {
   const root = document.documentElement;
-  return root.classList.contains("reduced-transparency");
+  if (root.classList.contains("transparency-high")) return "high";
+  if (root.classList.contains("transparency-low")) return "low";
+  return "off";
 };

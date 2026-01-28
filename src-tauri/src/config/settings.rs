@@ -36,6 +36,16 @@ pub enum ChatOutputMode {
     Scrolling,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum TransparencyMode {
+    #[default]
+    Off,
+    Low,
+    High,
+}
+
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -62,7 +72,7 @@ pub struct UserPreferences {
     pub room_list: Vec<String>,
     pub theme: String,
     #[serde(default)]
-    pub reduce_transparency: bool,
+    pub transparency_mode: TransparencyMode,
 
     // Sync thresholds
     pub seek_threshold_rewind: f64,
@@ -137,7 +147,6 @@ pub struct UserPreferences {
     pub auto_connect: bool,
     pub force_gui_prompt: bool,
     pub check_for_updates_automatically: Option<bool>,
-    pub show_contact_info: bool,
     pub debug: bool,
 }
 
@@ -179,7 +188,7 @@ impl Default for UserPreferences {
             default_room: "default".to_string(),
             room_list: Vec::new(),
             theme: "dark".to_string(),
-            reduce_transparency: false,
+            transparency_mode: TransparencyMode::Off,
 
             // Default sync thresholds (from sync engine)
             seek_threshold_rewind: 4.0,
@@ -253,7 +262,6 @@ impl Default for UserPreferences {
             auto_connect: false,
             force_gui_prompt: true,
             check_for_updates_automatically: None,
-            show_contact_info: true,
             debug: false,
         }
     }

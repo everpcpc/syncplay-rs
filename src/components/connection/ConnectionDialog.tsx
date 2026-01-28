@@ -96,7 +96,7 @@ function ComboBox({
             setIsOpen((prev) => !prev);
           }}
           className="absolute right-2 top-1/2 -translate-y-1/2 app-input-addon rounded px-1.5 py-1 text-xs"
-          aria-label="Toggle options"
+          aria-label="Options"
         >
           v
         </button>

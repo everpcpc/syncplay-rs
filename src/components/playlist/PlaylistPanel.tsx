@@ -169,7 +169,7 @@ export function PlaylistPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b app-divider app-surface">
+      <div className="p-4 border-b app-divider app-surface rounded-t-2xl">
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
             <LuListMusic className="app-icon app-text-muted" />
@@ -178,8 +178,7 @@ export function PlaylistPanel() {
                 onClick={handleAddFile}
                 disabled={!connection.connected}
                 className="btn-primary app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
-                title="Add file"
-                aria-label="Add file"
+                aria-label="Add"
               >
                 <LuPlus className="app-icon" />
               </button>
@@ -187,8 +186,7 @@ export function PlaylistPanel() {
                 onClick={handleClear}
                 disabled={!connection.connected || playlist.items.length === 0}
                 className="btn-danger app-icon-button disabled:opacity-60 disabled:cursor-not-allowed"
-                title="Clear playlist"
-                aria-label="Clear playlist"
+                aria-label="Clear"
               >
                 <LuTrash2 className="app-icon" />
               </button>
@@ -197,16 +195,14 @@ export function PlaylistPanel() {
               <button
                 onClick={() => setShowTrustedDomains(true)}
                 className="btn-neutral app-icon-button"
-                title="Manage trusted domains"
-                aria-label="Manage trusted domains"
+                aria-label="Trusted domains"
               >
                 <LuShield className="app-icon" />
               </button>
               <button
                 onClick={() => setShowMediaDirectories(true)}
-                className="btn-neutral app-icon-button"
-                title="Manage media directories"
-                aria-label="Manage media directories"
+                className="btn-neutral app-icon-button app-tooltip-right"
+                aria-label="Media directories"
               >
                 <LuFolder className="app-icon" />
               </button>
@@ -233,9 +229,8 @@ export function PlaylistPanel() {
                   <button
                     onClick={() => handleRemoveItem(index)}
                     disabled={!connection.connected}
-                    className="ml-2 app-text-danger hover:opacity-80 disabled:opacity-60"
-                    title="Remove item"
-                    aria-label="Remove item"
+                    className="ml-2 app-text-danger hover:opacity-80 disabled:opacity-60 app-tooltip"
+                    aria-label="Remove"
                   >
                     <LuX className="app-icon" />
                   </button>
@@ -247,7 +242,7 @@ export function PlaylistPanel() {
       </div>
 
       {/* Navigation controls */}
-      <div className="p-4 border-t app-divider app-surface">
+      <div className="p-4 border-t app-divider app-surface rounded-b-2xl">
         <div className="flex items-center justify-between gap-4">
           <div className="flex gap-2">
             <button
@@ -259,7 +254,6 @@ export function PlaylistPanel() {
                 playlist.currentIndex === 0
               }
               className="btn-neutral app-icon-button disabled:cursor-not-allowed"
-              title="Previous"
               aria-label="Previous"
             >
               <LuChevronLeft className="app-icon" />
@@ -273,7 +267,6 @@ export function PlaylistPanel() {
                 playlist.currentIndex >= playlist.items.length - 1
               }
               className="btn-neutral app-icon-button disabled:cursor-not-allowed"
-              title="Next"
               aria-label="Next"
             >
               <LuChevronRight className="app-icon" />
@@ -287,8 +280,11 @@ export function PlaylistPanel() {
               className={`btn-neutral app-icon-button ${
                 config?.user.shared_playlist_enabled ? "app-tag-accent" : ""
               }`}
-              title="Toggle shared playlists"
-              aria-label="Toggle shared playlists"
+              aria-label={
+                config?.user.shared_playlist_enabled
+                  ? "Shared playlists on"
+                  : "Shared playlists off"
+              }
             >
               <LuUsers className="app-icon" />
             </button>
@@ -299,8 +295,9 @@ export function PlaylistPanel() {
               className={`btn-neutral app-icon-button ${
                 config?.user.loop_at_end_of_playlist ? "app-tag-accent" : ""
               }`}
-              title="Toggle loop playlist"
-              aria-label="Toggle loop playlist"
+              aria-label={
+                config?.user.loop_at_end_of_playlist ? "Loop playlist on" : "Loop playlist off"
+              }
             >
               <LuRepeat className="app-icon" />
             </button>
@@ -310,9 +307,8 @@ export function PlaylistPanel() {
               }
               className={`btn-neutral app-icon-button ${
                 config?.user.loop_single_files ? "app-tag-accent" : ""
-              }`}
-              title="Toggle loop single file"
-              aria-label="Toggle loop single file"
+              } app-tooltip-right`}
+              aria-label={config?.user.loop_single_files ? "Loop file on" : "Loop file off"}
             >
               <LuRepeat1 className="app-icon" />
             </button>
