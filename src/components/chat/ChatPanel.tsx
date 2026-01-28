@@ -44,9 +44,9 @@ export function ChatPanel() {
   const getMessageStyle = (messageType: string) => {
     switch (messageType) {
       case "system":
-        return "text-yellow-400 italic";
+        return "app-text-warning italic";
       case "error":
-        return "text-red-400";
+        return "app-text-danger";
       default:
         return "";
     }
@@ -64,10 +64,10 @@ export function ChatPanel() {
           </p>
         ) : (
           messages.map((msg, index) => (
-            <div key={index} className="text-sm">
+            <div key={index} className="text-sm app-message">
               <span className="app-text-muted text-xs">{formatTimestamp(msg.timestamp)}</span>
               {msg.username && (
-                <span className="text-blue-400 font-medium ml-2">{msg.username}:</span>
+                <span className="app-text-accent font-medium ml-2">{msg.username}:</span>
               )}
               <span className={`ml-2 ${getMessageStyle(msg.messageType)}`}>{msg.message}</span>
             </div>

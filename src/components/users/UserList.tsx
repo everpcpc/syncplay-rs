@@ -26,7 +26,7 @@ export function UserList() {
               <div className="flex items-center justify-between">
                 <span className="font-medium">{user.username}</span>
                 {user.isController && (
-                  <span className="text-xs bg-blue-600 px-2 py-0.5 rounded">Controller</span>
+                  <span className="text-xs app-tag-accent px-2 py-0.5 rounded">Controller</span>
                 )}
               </div>
 
@@ -39,7 +39,7 @@ export function UserList() {
               <div className="flex items-center gap-2 mt-1">
                 <span
                   className={`text-xs px-2 py-0.5 rounded ${
-                    user.isReady ? "bg-green-600 text-white" : "app-chip-muted"
+                    user.isReady ? "app-tag-success" : "app-chip-muted"
                   }`}
                 >
                   {user.isReady ? "Ready" : "Not Ready"}

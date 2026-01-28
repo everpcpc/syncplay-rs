@@ -7,14 +7,14 @@ export function NotificationContainer() {
   const getNotificationStyles = (type: string) => {
     switch (type) {
       case "success":
-        return "bg-green-600 border-green-500";
+        return "app-toast app-toast-success";
       case "error":
-        return "bg-red-600 border-red-500";
+        return "app-toast app-toast-error";
       case "warning":
-        return "bg-yellow-600 border-yellow-500";
+        return "app-toast app-toast-warning";
       case "info":
       default:
-        return "bg-blue-600 border-blue-500";
+        return "app-toast app-toast-info";
     }
   };
 
@@ -39,7 +39,7 @@ export function NotificationContainer() {
           key={notification.id}
           className={`${getNotificationStyles(
             notification.type
-          )} border-l-4 p-4 rounded shadow-lg text-white animate-slide-in`}
+          )} p-4 rounded-lg shadow-lg animate-slide-in`}
         >
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-3">
@@ -48,7 +48,7 @@ export function NotificationContainer() {
             </div>
             <button
               onClick={() => removeNotification(notification.id)}
-              className="text-white hover:text-gray-200 ml-4"
+              className="app-text-muted hover:opacity-80 ml-4"
             >
               ✕
             </button>

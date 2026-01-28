@@ -345,10 +345,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
             </div>
 
             <div className="flex gap-2">
-              <button
-                onClick={handleDisconnect}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
-              >
+              <button onClick={handleDisconnect} className="flex-1 btn-danger px-4 py-2 rounded">
                 Disconnect
               </button>
               <button onClick={onClose} className="flex-1 btn-neutral px-4 py-2 rounded-md">
@@ -404,17 +401,13 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               />
             </div>
 
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/50 text-red-600 px-4 py-2 rounded-md text-sm">
-                {error}
-              </div>
-            )}
+            {error && <div className="app-alert app-alert-danger px-4 py-2 text-sm">{error}</div>}
 
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={isConnecting}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md"
+                className="flex-1 btn-primary disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-md"
               >
                 {isConnecting ? "Connecting..." : "Connect"}
               </button>
@@ -422,7 +415,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
                 type="button"
                 onClick={() => handleConnect(true)}
                 disabled={isConnecting}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md"
+                className="flex-1 btn-secondary disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-md"
               >
                 {isConnecting ? "Connecting..." : "Connect & Save"}
               </button>

@@ -124,7 +124,7 @@ export function PlaylistPanel() {
   };
 
   return (
-    <div className="flex flex-col h-full app-sidebar-right">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-4 border-b app-divider app-surface">
         <h2 className="text-lg font-semibold mb-2">Playlist</h2>
@@ -132,14 +132,14 @@ export function PlaylistPanel() {
           <button
             onClick={handleAddFile}
             disabled={!connection.connected}
-            className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-1 rounded-md text-sm"
+            className="flex-1 btn-primary disabled:opacity-60 disabled:cursor-not-allowed px-3 py-1 rounded-md text-sm"
           >
             Add File
           </button>
           <button
             onClick={handleClear}
             disabled={!connection.connected || playlist.items.length === 0}
-            className="bg-red-600 hover:bg-red-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-1 rounded-md text-sm"
+            className="btn-danger disabled:opacity-60 disabled:cursor-not-allowed px-3 py-1 rounded-md text-sm"
           >
             Clear
           </button>
@@ -156,7 +156,7 @@ export function PlaylistPanel() {
               <div
                 key={index}
                 className={`p-2 rounded-md text-sm ${
-                  index === playlist.currentIndex ? "bg-blue-600 text-white" : "app-panel-muted"
+                  index === playlist.currentIndex ? "app-item-active" : "app-panel-muted"
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -164,7 +164,7 @@ export function PlaylistPanel() {
                   <button
                     onClick={() => handleRemoveItem(index)}
                     disabled={!connection.connected}
-                    className="ml-2 text-red-500 hover:text-red-400 disabled:opacity-60"
+                    className="ml-2 app-text-danger hover:opacity-80 disabled:opacity-60"
                   >
                     ✕
                   </button>

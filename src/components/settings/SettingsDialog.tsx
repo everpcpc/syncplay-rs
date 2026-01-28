@@ -350,11 +350,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id as SettingsTab)}
-                  className={`px-4 py-2 ${
-                    activeTab === tab.id
-                      ? "border-b-2 border-blue-500 text-blue-500"
-                      : "app-text-muted"
-                  }`}
+                  className={`px-4 py-2 app-tab ${activeTab === tab.id ? "app-tab-active" : ""}`}
                 >
                   {tab.label}
                 </button>
@@ -373,7 +369,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     placeholder="syncplay.pl:8999"
                   />
                   {serverAddressError ? (
-                    <p className="text-xs text-red-600 mt-1">{serverAddressError}</p>
+                    <p className="text-xs app-text-danger mt-1">{serverAddressError}</p>
                   ) : (
                     <p className="text-xs app-text-muted mt-1">Format: host:port</p>
                   )}
@@ -446,7 +442,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     <button
                       type="button"
                       onClick={addRoomEntry}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm"
+                      className="btn-primary px-3 py-2 rounded text-sm"
                     >
                       Add
                     </button>
@@ -464,7 +460,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                           <button
                             type="button"
                             onClick={() => removeRoomEntry(room)}
-                            className="text-xs text-red-600 hover:text-red-500"
+                            className="text-xs app-text-danger hover:opacity-80"
                           >
                             Remove
                           </button>
@@ -630,7 +626,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     <button
                       type="button"
                       onClick={addMediaDirectory}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm"
+                      className="btn-primary px-3 py-2 rounded text-sm"
                     >
                       Add
                     </button>
@@ -655,7 +651,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                           <button
                             type="button"
                             onClick={() => removeMediaDirectory(dir)}
-                            className="text-xs text-red-600 hover:text-red-500"
+                            className="text-xs app-text-danger hover:opacity-80"
                           >
                             Remove
                           </button>
@@ -1076,7 +1072,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     <button
                       type="button"
                       onClick={addTrustedDomain}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm"
+                      className="btn-primary px-3 py-2 rounded text-sm"
                     >
                       Add
                     </button>
@@ -1094,7 +1090,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                           <button
                             type="button"
                             onClick={() => removeTrustedDomain(domain)}
-                            className="text-xs text-red-600 hover:text-red-500"
+                            className="text-xs app-text-danger hover:opacity-80"
                           >
                             Remove
                           </button>
@@ -1632,6 +1628,21 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
+                    checked={config.user.reduce_transparency}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, reduce_transparency: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Reduce transparency
+                </label>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
                     checked={config.user.show_contact_info}
                     onChange={(e) =>
                       setConfig({
@@ -1690,14 +1701,12 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             )}
 
             {error && (
-              <div className="mt-4 bg-red-500/10 border border-red-500/50 text-red-600 px-4 py-2 rounded-md text-sm">
-                {error}
-              </div>
+              <div className="mt-4 app-alert app-alert-danger px-4 py-2 text-sm">{error}</div>
             )}
           </>
         ) : (
           <div className="text-center py-8">
-            <p className="text-red-600">Failed to load settings</p>
+            <p className="app-text-danger">Failed to load settings</p>
           </div>
         )}
       </div>

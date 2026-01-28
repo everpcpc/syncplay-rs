@@ -23,6 +23,7 @@ export interface UserPreferences {
   default_room: string;
   room_list: string[];
   theme: string;
+  reduce_transparency: boolean;
 
   seek_threshold_rewind: number;
   seek_threshold_fastforward: number;

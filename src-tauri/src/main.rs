@@ -10,6 +10,7 @@ mod config;
 mod network;
 mod player;
 mod utils;
+mod window_effects;
 
 use app_state::AppState;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -43,6 +44,10 @@ fn main() {
                 .sync_engine
                 .lock()
                 .update_from_config(&config.user);
+            crate::window_effects::update_window_effects(
+                app.handle(),
+                config.user.reduce_transparency,
+            );
             let state = app_state.clone();
             tauri::async_runtime::spawn(async move {
                 crate::player::controller::spawn_player_state_loop(state);

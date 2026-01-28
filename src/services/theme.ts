@@ -10,7 +10,17 @@ export const applyTheme = (value?: string) => {
   root.classList.toggle("theme-dark", theme !== "light");
 };
 
+export const applyTransparency = (reduceTransparency?: boolean) => {
+  const root = document.documentElement;
+  root.classList.toggle("reduced-transparency", Boolean(reduceTransparency));
+};
+
 export const getAppliedTheme = (): ThemePreference => {
   const root = document.documentElement;
   return root.classList.contains("theme-light") ? "light" : "dark";
+};
+
+export const getAppliedTransparency = (): boolean => {
+  const root = document.documentElement;
+  return root.classList.contains("reduced-transparency");
 };

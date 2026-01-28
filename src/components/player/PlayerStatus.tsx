@@ -45,16 +45,16 @@ export function PlayerStatus() {
       {/* Playback state */}
       <div className="flex items-center gap-2">
         {player.paused ? (
-          <span className="text-yellow-400">⏸ Paused</span>
+          <span className="app-text-warning">⏸ Paused</span>
         ) : (
-          <span className="text-green-400">▶ Playing</span>
+          <span className="app-text-success">▶ Playing</span>
         )}
       </div>
 
       {/* Speed indicator */}
       {formatSpeed(player.speed) && (
         <div className="flex items-center gap-2">
-          <span className="text-orange-400">{formatSpeed(player.speed)}</span>
+          <span className="app-text-warning">{formatSpeed(player.speed)}</span>
         </div>
       )}
 
@@ -62,7 +62,7 @@ export function PlayerStatus() {
       {connection.server && (
         <div className="flex items-center gap-2 ml-auto">
           <span className="app-text-muted">Server:</span>
-          <span className="text-green-400">{connection.server}</span>
+          <span className="app-text-accent">{connection.server}</span>
         </div>
       )}
     </div>

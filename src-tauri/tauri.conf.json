@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "security": {
       "csp": null,
       "capabilities": [
@@ -25,7 +26,11 @@
         "width": 1200,
         "height": 800,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   },

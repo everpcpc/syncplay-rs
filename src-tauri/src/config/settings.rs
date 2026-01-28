@@ -61,6 +61,8 @@ pub struct UserPreferences {
     pub default_room: String,
     pub room_list: Vec<String>,
     pub theme: String,
+    #[serde(default)]
+    pub reduce_transparency: bool,
 
     // Sync thresholds
     pub seek_threshold_rewind: f64,
@@ -175,6 +177,7 @@ impl Default for UserPreferences {
             default_room: "default".to_string(),
             room_list: Vec::new(),
             theme: "dark".to_string(),
+            reduce_transparency: false,
 
             // Default sync thresholds (from sync engine)
             seek_threshold_rewind: 4.0,

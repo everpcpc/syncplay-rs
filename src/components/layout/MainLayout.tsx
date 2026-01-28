@@ -9,7 +9,12 @@ import { NotificationContainer } from "../notifications/NotificationContainer";
 import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
-import { applyTheme, normalizeTheme, ThemePreference } from "../../services/theme";
+import {
+  applyTheme,
+  applyTransparency,
+  normalizeTheme,
+  ThemePreference,
+} from "../../services/theme";
 import { SyncplayConfig } from "../../types/config";
 
 export function MainLayout() {
@@ -36,6 +41,7 @@ export function MainLayout() {
         const normalizedTheme = normalizeTheme(config.user.theme);
         setTheme(normalizedTheme);
         applyTheme(normalizedTheme);
+        applyTransparency(config.user.reduce_transparency);
 
         if (config.user.force_gui_prompt) {
           setShowConnectionDialog(true);
@@ -79,6 +85,7 @@ export function MainLayout() {
     const normalizedTheme = normalizeTheme(config.user.theme);
     setTheme(normalizedTheme);
     applyTheme(normalizedTheme);
+    applyTransparency(config.user.reduce_transparency);
   }, [config]);
 
   const handleToggleTheme = async () => {
@@ -109,7 +116,7 @@ export function MainLayout() {
     <div className="flex flex-col h-screen app-shell">
       <NotificationContainer />
       {/* Header */}
-      <header className="app-header px-6 py-4 backdrop-blur">
+      <header className="app-header px-6 py-4">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold">Syncplay</h1>
 
@@ -137,7 +144,7 @@ export function MainLayout() {
               </button>
               <button
                 onClick={() => setShowConnectionDialog(true)}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded-md text-sm"
+                className="btn-primary px-4 py-1.5 rounded-md text-sm"
               >
                 Connect
               </button>
@@ -147,20 +154,20 @@ export function MainLayout() {
       </header>
 
       {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 app-main">
         {/* Users sidebar */}
         <aside className="w-64 app-sidebar p-5 overflow-auto">
           <UserList />
         </aside>
 
         {/* Chat area */}
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col app-main-panel">
           <ChatPanel />
         </main>
 
         {/* Playlist sidebar */}
         {showPlaylist && (
-          <aside className="w-80">
+          <aside className="w-80 app-sidebar-right overflow-hidden">
             <PlaylistPanel />
           </aside>
         )}
