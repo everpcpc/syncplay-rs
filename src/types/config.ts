@@ -6,6 +6,7 @@ export type UnpauseAction =
   | "always";
 export type ChatInputPosition = "top" | "middle" | "bottom";
 export type ChatOutputMode = "chatroom" | "scrolling";
+export type TransparencyMode = "off" | "low" | "high";
 
 export interface ServerConfig {
   host: string;
@@ -23,7 +24,7 @@ export interface UserPreferences {
   default_room: string;
   room_list: string[];
   theme: string;
-  reduce_transparency: boolean;
+  transparency_mode: TransparencyMode;
 
   seek_threshold_rewind: number;
   seek_threshold_fastforward: number;
@@ -90,7 +91,6 @@ export interface UserPreferences {
   auto_connect: boolean;
   force_gui_prompt: boolean;
   check_for_updates_automatically: boolean | null;
-  show_contact_info: boolean;
   debug: boolean;
 }
 

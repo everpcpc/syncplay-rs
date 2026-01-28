@@ -4,6 +4,9 @@ import { ChatPanel } from "../chat/ChatPanel";
 import { PlayerStatus } from "../player/PlayerStatus";
 import {
   LuColumns2,
+  LuContrast,
+  LuDroplet,
+  LuDroplets,
   LuLink2,
   LuListMinus,
   LuListMusic,
@@ -26,6 +29,8 @@ import {
   applyTransparency,
   normalizeTheme,
   ThemePreference,
+  TransparencyPreference,
+  normalizeTransparency,
 } from "../../services/theme";
 import { SyncplayConfig } from "../../types/config";
 
@@ -36,6 +41,7 @@ export function MainLayout() {
   const [showPlaylist, setShowPlaylist] = useState(true);
   const [sideLayout, setSideLayout] = useState<"columns" | "rows">("rows");
   const [theme, setTheme] = useState<ThemePreference>("dark");
+  const [transparencyMode, setTransparencyMode] = useState<TransparencyPreference>("off");
   const connection = useSyncplayStore((state) => state.connection);
   const config = useSyncplayStore((state) => state.config);
   const setConfig = useSyncplayStore((state) => state.setConfig);
@@ -55,7 +61,9 @@ export function MainLayout() {
         const normalizedTheme = normalizeTheme(config.user.theme);
         setTheme(normalizedTheme);
         applyTheme(normalizedTheme);
-        applyTransparency(config.user.reduce_transparency);
+        const normalizedTransparency = normalizeTransparency(config.user.transparency_mode);
+        setTransparencyMode(normalizedTransparency);
+        applyTransparency(normalizedTransparency);
 
         if (config.user.force_gui_prompt) {
           setShowConnectionDialog(true);
@@ -102,7 +110,9 @@ export function MainLayout() {
     const normalizedTheme = normalizeTheme(config.user.theme);
     setTheme(normalizedTheme);
     applyTheme(normalizedTheme);
-    applyTransparency(config.user.reduce_transparency);
+    const normalizedTransparency = normalizeTransparency(config.user.transparency_mode);
+    setTransparencyMode(normalizedTransparency);
+    applyTransparency(normalizedTransparency);
   }, [config]);
 
   const handleToggleTheme = async () => {
@@ -125,6 +135,30 @@ export function MainLayout() {
       addNotification({
         type: "error",
         message: "Failed to save theme",
+      });
+    }
+  };
+
+  const handleToggleTransparency = async () => {
+    const nextMode =
+      transparencyMode === "off" ? "low" : transparencyMode === "low" ? "high" : "off";
+    setTransparencyMode(nextMode);
+    applyTransparency(nextMode);
+
+    try {
+      const config = await invoke<SyncplayConfig>("get_config");
+      await invoke("update_config", {
+        config: {
+          ...config,
+          user: { ...config.user, transparency_mode: nextMode },
+        },
+      });
+    } catch (error) {
+      setTransparencyMode(transparencyMode);
+      applyTransparency(transparencyMode);
+      addNotification({
+        type: "error",
+        message: "Failed to save transparency",
       });
     }
   };
@@ -190,8 +224,7 @@ export function MainLayout() {
                     onClick={handleTogglePlaylist}
                     className="btn-neutral app-icon-button"
                     data-tauri-drag-region="false"
-                    title={showPlaylist ? "Hide playlist" : "Show playlist"}
-                    aria-label={showPlaylist ? "Hide playlist" : "Show playlist"}
+                    aria-label={showPlaylist ? "Playlist shown" : "Playlist hidden"}
                   >
                     {showPlaylist ? (
                       <LuListMusic className="app-icon" />
@@ -225,8 +258,7 @@ export function MainLayout() {
                     }
                     className="btn-neutral app-icon-button"
                     data-tauri-drag-region="false"
-                    title={sideLayout === "columns" ? "Stack panels" : "Split panels"}
-                    aria-label={sideLayout === "columns" ? "Stack panels" : "Split panels"}
+                    aria-label={sideLayout === "columns" ? "Layout split" : "Layout stacked"}
                   >
                     {sideLayout === "rows" ? (
                       <LuRows2 className="app-icon" />
@@ -238,15 +270,32 @@ export function MainLayout() {
                     onClick={handleToggleTheme}
                     className="btn-neutral app-icon-button"
                     data-tauri-drag-region="false"
-                    title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-                    aria-label={
-                      theme === "light" ? "Switch to dark theme" : "Switch to light theme"
-                    }
+                    aria-label={theme === "light" ? "Theme light" : "Theme dark"}
                   >
                     {theme === "light" ? (
                       <LuSun className="app-icon" />
                     ) : (
                       <LuMoon className="app-icon" />
+                    )}
+                  </button>
+                  <button
+                    onClick={handleToggleTransparency}
+                    className="btn-neutral app-icon-button"
+                    data-tauri-drag-region="false"
+                    aria-label={
+                      transparencyMode === "off"
+                        ? "Transparency off"
+                        : transparencyMode === "low"
+                          ? "Transparency low"
+                          : "Transparency high"
+                    }
+                  >
+                    {transparencyMode === "off" ? (
+                      <LuContrast className="app-icon" />
+                    ) : transparencyMode === "low" ? (
+                      <LuDroplet className="app-icon" />
+                    ) : (
+                      <LuDroplets className="app-icon" />
                     )}
                   </button>
                 </div>
@@ -255,16 +304,14 @@ export function MainLayout() {
                     onClick={() => setShowConnectionDialog(true)}
                     className="btn-primary app-icon-button"
                     data-tauri-drag-region="false"
-                    title="Connect"
                     aria-label="Connect"
                   >
                     <LuLink2 className="app-icon" />
                   </button>
                   <button
                     onClick={() => setShowSettingsDialog(true)}
-                    className="btn-neutral app-icon-button"
+                    className="btn-neutral app-icon-button app-tooltip-right"
                     data-tauri-drag-region="false"
-                    title="Settings"
                     aria-label="Settings"
                   >
                     <LuSettings className="app-icon" />
@@ -291,12 +338,12 @@ export function MainLayout() {
                   : "minmax(0, 1fr)",
             }}
           >
-            <aside className="app-side-panel app-sidebar p-5 overflow-auto">
+            <aside className="app-side-panel app-sidebar p-5 overflow-visible">
               <UserList />
             </aside>
 
             {showPlaylist && (
-              <aside className="app-side-panel app-sidebar-right overflow-hidden">
+              <aside className="app-side-panel app-sidebar-right overflow-visible">
                 <PlaylistPanel />
               </aside>
             )}

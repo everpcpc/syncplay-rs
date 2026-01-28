@@ -1256,51 +1256,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    checked={config.user.show_playlist}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, show_playlist: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  Show playlist by default
-                </label>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={config.user.reduce_transparency}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, reduce_transparency: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  Reduce transparency
-                </label>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={config.user.show_contact_info}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, show_contact_info: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  Show contact info
-                </label>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
                     checked={config.user.debug}
                     onChange={(e) =>
                       setConfig({

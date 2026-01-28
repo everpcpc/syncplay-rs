@@ -16,7 +16,7 @@ export function UserList() {
 
   if (!connection.connected) {
     return (
-      <div className="space-y-2">
+      <div className="flex flex-col h-full gap-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <LuUsers className="app-icon app-text-muted" />
@@ -25,8 +25,7 @@ export function UserList() {
           <button
             onClick={() => setShowRoomManager(true)}
             className="btn-neutral app-icon-button"
-            title="Manage rooms"
-            aria-label="Manage rooms"
+            aria-label="Rooms"
           >
             <LuPencilLine className="app-icon" />
           </button>
@@ -38,7 +37,7 @@ export function UserList() {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col h-full gap-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <LuUsers className="app-icon app-text-muted" />
@@ -48,17 +47,18 @@ export function UserList() {
         <button
           onClick={() => setShowRoomManager(true)}
           className="btn-neutral app-icon-button"
-          title="Manage rooms"
-          aria-label="Manage rooms"
+          aria-label="Rooms"
         >
           <LuPencilLine className="app-icon" />
         </button>
       </div>
 
       {users.length === 0 ? (
-        <p className="app-text-muted text-sm">No users in room</p>
+        <div className="flex-1 overflow-auto">
+          <p className="app-text-muted text-sm">No users in room</p>
+        </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 flex-1 overflow-auto pr-1">
           {users.map((user) => (
             <div key={user.username} className="app-panel-muted rounded-md p-3 text-sm">
               <div className="flex items-center justify-between">
