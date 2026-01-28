@@ -226,7 +226,19 @@ fn start_mpv_process_if_needed(
     state: &Arc<AppState>,
     config: &SyncplayConfig,
 ) -> Result<(), String> {
-    if state.mpv_process.lock().is_some() {
+    let should_start = {
+        let mut process_guard = state.mpv_process.lock();
+        if let Some(child) = process_guard.as_mut() {
+            if let Ok(Some(_)) = child.try_wait() {
+                *process_guard = None;
+            } else {
+                return Ok(());
+            }
+        }
+        process_guard.is_none()
+    };
+
+    if !should_start {
         return Ok(());
     }
 

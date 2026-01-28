@@ -47,6 +47,14 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 crate::player::controller::spawn_player_state_loop(state);
             });
+            let state = app_state.clone();
+            if should_autostart_player(&config.player.player_path) {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::player::controller::ensure_mpv_connected(&state).await {
+                        tracing::warn!("Failed to autostart player: {}", e);
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -64,4 +72,9 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn should_autostart_player(path: &str) -> bool {
+    let trimmed = path.trim();
+    !trimmed.is_empty() && trimmed != "custom"
 }
