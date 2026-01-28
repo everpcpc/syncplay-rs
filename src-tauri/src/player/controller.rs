@@ -17,8 +17,10 @@ use crate::utils::{
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
+use tauri::Manager;
 
 pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String> {
     if state.is_player_connected() {
@@ -38,17 +40,23 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
         }
     }
 
+    let should_spawn = should_spawn_player(state, kind);
     let (backend, child) = match kind {
         PlayerKind::Mpv | PlayerKind::MpvNet | PlayerKind::Iina => {
-            let child = start_mpv_process_if_needed(state, &config, &player_path, kind, &args)?;
+            let child = if should_spawn {
+                start_mpv_process_if_needed(state, &config, &player_path, kind, &args)?
+            } else {
+                None
+            };
             let mut mpv = MpvIpc::new(config.player.mpv_socket_path.clone());
             let mut attempts = 0;
+            let max_attempts = if kind == PlayerKind::Iina { 50 } else { 10 };
             let event_rx = loop {
                 match mpv.connect().await {
                     Ok(rx) => break rx,
                     Err(e) => {
                         attempts += 1;
-                        if attempts >= 10 {
+                        if attempts >= max_attempts {
                             return Err(format!("Failed to connect to mpv IPC: {}", e));
                         }
                         sleep(Duration::from_millis(200)).await;
@@ -60,21 +68,33 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
             (backend, child)
         }
         PlayerKind::Vlc => {
-            let (backend, child) = VlcBackend::start(&player_path, &args, None)
-                .await
-                .map_err(|e| e.to_string())?;
+            let (backend, child) = if should_spawn {
+                VlcBackend::start(&player_path, &args, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                return Err("Player not running".to_string());
+            };
             (Arc::new(backend) as Arc<dyn PlayerBackend>, Some(child))
         }
         PlayerKind::Mplayer => {
-            let (backend, child) = MplayerBackend::start(&player_path, &args, None)
-                .await
-                .map_err(|e| e.to_string())?;
+            let (backend, child) = if should_spawn {
+                MplayerBackend::start(&player_path, &args, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                return Err("Player not running".to_string());
+            };
             (Arc::new(backend) as Arc<dyn PlayerBackend>, Some(child))
         }
         PlayerKind::MpcHc | PlayerKind::MpcBe => {
-            let (backend, child) = MpcWebBackend::start(kind, &player_path, &args, None)
-                .await
-                .map_err(|e| e.to_string())?;
+            let (backend, child) = if should_spawn {
+                MpcWebBackend::start(kind, &player_path, &args, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                return Err("Player not running".to_string());
+            };
             (Arc::new(backend) as Arc<dyn PlayerBackend>, child)
         }
         PlayerKind::Unknown => {
@@ -83,6 +103,10 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
     };
 
     *state.player.lock() = Some(backend);
+    if should_spawn {
+        *state.last_player_spawn.lock() = Some(Instant::now());
+        *state.last_player_kind.lock() = Some(kind);
+    }
     if let Some(child) = child {
         *state.player_process.lock() = Some(child);
     } else if !matches!(
@@ -101,6 +125,8 @@ pub async fn restart_player(state: &Arc<AppState>) -> Result<(), String> {
 
 pub async fn stop_player(state: &Arc<AppState>) -> Result<(), String> {
     *state.player.lock() = None;
+    *state.last_player_spawn.lock() = None;
+    *state.last_player_kind.lock() = None;
     let child = {
         let mut guard = state.player_process.lock();
         guard.take()
@@ -327,6 +353,26 @@ pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Optio
     None
 }
 
+pub async fn load_placeholder_if_empty(state: &Arc<AppState>) -> Result<(), String> {
+    let placeholder = resolve_placeholder_path(state)
+        .ok_or_else(|| "Placeholder asset not found".to_string())?;
+    let player = state
+        .player
+        .lock()
+        .clone()
+        .ok_or_else(|| "Player not connected".to_string())?;
+    let player_state = player.get_state();
+    if player_state.filename.is_some() {
+        return Ok(());
+    }
+    *state.suppress_next_file_update.lock() = true;
+    player
+        .load_file(placeholder.to_string_lossy().as_ref())
+        .await
+        .map_err(|e| format!("Failed to load placeholder: {}", e))?;
+    Ok(())
+}
+
 fn resolve_player_path(config: &SyncplayConfig) -> String {
     let trimmed = config.player.player_path.trim();
     if trimmed.is_empty() || trimmed == "custom" {
@@ -344,16 +390,41 @@ fn build_player_arguments(config: &SyncplayConfig, player_path: &str) -> Vec<Str
     args
 }
 
-fn find_iina_placeholder() -> Option<String> {
+fn resolve_placeholder_path(state: &AppState) -> Option<PathBuf> {
     let candidates = ["app-icon.png", "icon.svg", "app-icon.svg"];
+    if let Some(handle) = state.app_handle.lock().clone() {
+        for name in candidates {
+            if let Ok(path) = handle
+                .path()
+                .resolve(name, tauri::path::BaseDirectory::Resource)
+            {
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
     let cwd = std::env::current_dir().ok()?;
     for name in candidates {
         let path = cwd.join(name);
         if path.exists() {
-            return Some(path.to_string_lossy().to_string());
+            return Some(path);
         }
     }
     None
+}
+
+fn should_spawn_player(state: &AppState, kind: PlayerKind) -> bool {
+    if kind != PlayerKind::Iina {
+        return true;
+    }
+    let now = Instant::now();
+    let last_spawn = state.last_player_spawn.lock().clone();
+    let last_kind = state.last_player_kind.lock().clone();
+    let recent = last_spawn
+        .map(|instant| now.duration_since(instant) < Duration::from_secs(15))
+        .unwrap_or(false);
+    !(recent && last_kind == Some(PlayerKind::Iina))
 }
 
 fn start_mpv_process_if_needed(
@@ -387,7 +458,7 @@ fn start_mpv_process_if_needed(
                 "--mpv-input-ipc-server={}",
                 config.player.mpv_socket_path
             ));
-            if let Some(placeholder) = find_iina_placeholder() {
+            if let Some(placeholder) = resolve_placeholder_path(state) {
                 cmd.arg(placeholder);
             }
         }

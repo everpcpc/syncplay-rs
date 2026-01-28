@@ -417,21 +417,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">MPV Socket Path</label>
-                  <input
-                    type="text"
-                    value={config.player.mpv_socket_path}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        player: { ...config.player, mpv_socket_path: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
                 <div className="flex flex-col gap-2">
                   <label className="flex items-center gap-2 text-sm">
                     <input

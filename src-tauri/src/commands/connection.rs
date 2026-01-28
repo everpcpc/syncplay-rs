@@ -8,7 +8,9 @@ use crate::network::messages::{
     TLSMessage, UserUpdate,
 };
 use crate::network::tls::create_tls_connector;
-use crate::player::controller::{ensure_player_connected, load_media_by_name, stop_player};
+use crate::player::controller::{
+    ensure_player_connected, load_media_by_name, load_placeholder_if_empty, stop_player,
+};
 use crate::player::properties::PlayerState;
 use crate::utils::same_filename;
 use std::sync::Arc;
@@ -120,6 +122,8 @@ pub async fn connect_to_server<R: Runtime>(
 
             if let Err(e) = ensure_player_connected(state.inner()).await {
                 tracing::warn!("Failed to connect to player: {}", e);
+            } else if let Err(e) = load_placeholder_if_empty(state.inner()).await {
+                tracing::warn!("Failed to load placeholder: {}", e);
             }
 
             // Emit connection status event
