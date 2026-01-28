@@ -36,10 +36,7 @@ impl VlcBackend {
             .stderr(std::process::Stdio::null());
 
         let mut child = cmd.spawn().context("Failed to start VLC")?;
-        let stdin = child
-            .stdin
-            .take()
-            .context("Failed to capture VLC stdin")?;
+        let stdin = child.stdin.take().context("Failed to capture VLC stdin")?;
         let stdout = child
             .stdout
             .take()
@@ -78,10 +75,13 @@ impl VlcBackend {
         guard.flush().await.context("Failed to flush VLC")?;
         Ok(())
     }
-
 }
 
-fn handle_line(state: &Arc<Mutex<PlayerState>>, last_loaded: &Arc<Mutex<Option<String>>>, line: &str) {
+fn handle_line(
+    state: &Arc<Mutex<PlayerState>>,
+    last_loaded: &Arc<Mutex<Option<String>>>,
+    line: &str,
+) {
     debug!("vlc >> {}", line);
     let trimmed = line.trim();
     if let Some(value) = trimmed.strip_prefix("time:") {
@@ -126,7 +126,6 @@ fn handle_line(state: &Arc<Mutex<PlayerState>>, last_loaded: &Arc<Mutex<Option<S
         state_guard.path = Some(value.to_string());
         state_guard.filename = Some(filename.clone());
         *last_loaded.lock() = Some(value.to_string());
-        return;
     }
 }
 

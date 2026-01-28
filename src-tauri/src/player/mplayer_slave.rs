@@ -95,7 +95,6 @@ impl MplayerBackend {
         guard.flush().await.context("Failed to flush MPlayer")?;
         Ok(())
     }
-
 }
 
 fn handle_line(state: &Arc<Mutex<PlayerState>>, line: &str) {
@@ -203,8 +202,7 @@ impl PlayerBackend for MplayerBackend {
     }
 
     async fn load_file(&self, path: &str) -> anyhow::Result<()> {
-        self.send_command(&format!("loadfile \"{}\" 0", path))
-            .await
+        self.send_command(&format!("loadfile \"{}\" 0", path)).await
     }
 
     fn show_osd(&self, text: &str, _duration_ms: Option<u64>) -> anyhow::Result<()> {

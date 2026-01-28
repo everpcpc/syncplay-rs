@@ -60,13 +60,15 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
             (backend, child)
         }
         PlayerKind::Vlc => {
-            let (backend, child) =
-                VlcBackend::start(&player_path, &args, None).await.map_err(|e| e.to_string())?;
+            let (backend, child) = VlcBackend::start(&player_path, &args, None)
+                .await
+                .map_err(|e| e.to_string())?;
             (Arc::new(backend) as Arc<dyn PlayerBackend>, Some(child))
         }
         PlayerKind::Mplayer => {
-            let (backend, child) =
-                MplayerBackend::start(&player_path, &args, None).await.map_err(|e| e.to_string())?;
+            let (backend, child) = MplayerBackend::start(&player_path, &args, None)
+                .await
+                .map_err(|e| e.to_string())?;
             (Arc::new(backend) as Arc<dyn PlayerBackend>, Some(child))
         }
         PlayerKind::MpcHc | PlayerKind::MpcBe => {
@@ -83,7 +85,10 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
     *state.player.lock() = Some(backend);
     if let Some(child) = child {
         *state.player_process.lock() = Some(child);
-    } else if !matches!(kind, PlayerKind::Mpv | PlayerKind::MpvNet | PlayerKind::Iina) {
+    } else if !matches!(
+        kind,
+        PlayerKind::Mpv | PlayerKind::MpvNet | PlayerKind::Iina
+    ) {
         *state.player_process.lock() = None;
     }
     Ok(())
@@ -168,7 +173,11 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                     (player_state.duration, player_state.position)
                 {
                     if duration > 0.0 {
-                        let threshold = if duration > 0.2 { duration - 0.2 } else { duration };
+                        let threshold = if duration > 0.2 {
+                            duration - 0.2
+                        } else {
+                            duration
+                        };
                         if position >= threshold {
                             eof_sent = true;
                             handle_end_of_file(&state).await;
@@ -201,7 +210,8 @@ pub async fn load_media_by_name(
             .lock()
             .clone()
             .ok_or_else(|| "Player not connected".to_string())?;
-        player.load_file(filename)
+        player
+            .load_file(filename)
             .await
             .map_err(|e| format!("Failed to load URL: {}", e))?;
         state.client_state.set_file(Some(filename.to_string()));
@@ -341,22 +351,19 @@ fn start_mpv_process_if_needed(
     let launch_args = args.to_vec();
     match kind {
         PlayerKind::Iina => {
-            cmd.arg("--no-stdin")
-                .arg(format!(
-                    "--mpv-input-ipc-server={}",
-                    config.player.mpv_socket_path
-                ));
+            cmd.arg("--no-stdin").arg(format!(
+                "--mpv-input-ipc-server={}",
+                config.player.mpv_socket_path
+            ));
             if let Some(placeholder) = find_iina_placeholder() {
                 cmd.arg(placeholder);
             }
         }
         _ => {
-            cmd.arg("--idle=yes")
-                .arg("--no-terminal")
-                .arg(format!(
-                    "--input-ipc-server={}",
-                    config.player.mpv_socket_path
-                ));
+            cmd.arg("--idle=yes").arg("--no-terminal").arg(format!(
+                "--input-ipc-server={}",
+                config.player.mpv_socket_path
+            ));
         }
     }
     cmd.args(&launch_args)

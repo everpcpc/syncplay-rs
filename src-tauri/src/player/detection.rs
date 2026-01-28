@@ -304,7 +304,9 @@ fn get_mplayer_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         paths.push(PathBuf::from("C:\\Program Files\\mplayer\\mplayer.exe"));
-        paths.push(PathBuf::from("C:\\Program Files (x86)\\mplayer\\mplayer.exe"));
+        paths.push(PathBuf::from(
+            "C:\\Program Files (x86)\\mplayer\\mplayer.exe",
+        ));
     }
 
     if let Ok(output) = Command::new("which").arg("mplayer").output() {

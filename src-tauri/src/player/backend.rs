@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use super::properties::PlayerState;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerKind {
