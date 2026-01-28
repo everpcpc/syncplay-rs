@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { UserList } from "../users/UserList";
 import { ChatPanel } from "../chat/ChatPanel";
 import { PlayerStatus } from "../player/PlayerStatus";
-import { FiLayout, FiLink2, FiList, FiMoon, FiSettings, FiSun } from "react-icons/fi";
+import {
+  LuColumns2,
+  LuLink2,
+  LuListMinus,
+  LuListMusic,
+  LuMoon,
+  LuRows2,
+  LuSettings,
+  LuSun,
+} from "react-icons/lu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWindowDrag } from "../../hooks/useWindowDrag";
 import { PlaylistPanel } from "../playlist/PlaylistPanel";
@@ -11,7 +20,7 @@ import { SettingsDialog } from "../settings/SettingsDialog";
 import { NotificationContainer } from "../notifications/NotificationContainer";
 import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   applyTheme,
   applyTransparency,
@@ -21,7 +30,7 @@ import {
 import { SyncplayConfig } from "../../types/config";
 
 export function MainLayout() {
-  const appWindow = getCurrentWindow();
+  const appWindow = isTauri() ? getCurrentWindow() : null;
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
@@ -148,6 +157,7 @@ export function MainLayout() {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest('[data-tauri-drag-region="false"]')) return;
+    if (!appWindow) return;
     void appWindow.startDragging();
   };
   useWindowDrag("titlebar");
@@ -183,7 +193,11 @@ export function MainLayout() {
                     title={showPlaylist ? "Hide playlist" : "Show playlist"}
                     aria-label={showPlaylist ? "Hide playlist" : "Show playlist"}
                   >
-                    <FiList className="app-icon" />
+                    {showPlaylist ? (
+                      <LuListMusic className="app-icon" />
+                    ) : (
+                      <LuListMinus className="app-icon" />
+                    )}
                   </button>
                   <button
                     onClick={() =>
@@ -214,7 +228,11 @@ export function MainLayout() {
                     title={sideLayout === "columns" ? "Stack panels" : "Split panels"}
                     aria-label={sideLayout === "columns" ? "Stack panels" : "Split panels"}
                   >
-                    <FiLayout className="app-icon" />
+                    {sideLayout === "rows" ? (
+                      <LuRows2 className="app-icon" />
+                    ) : (
+                      <LuColumns2 className="app-icon" />
+                    )}
                   </button>
                   <button
                     onClick={handleToggleTheme}
@@ -226,9 +244,9 @@ export function MainLayout() {
                     }
                   >
                     {theme === "light" ? (
-                      <FiMoon className="app-icon" />
+                      <LuSun className="app-icon" />
                     ) : (
-                      <FiSun className="app-icon" />
+                      <LuMoon className="app-icon" />
                     )}
                   </button>
                 </div>
@@ -240,7 +258,7 @@ export function MainLayout() {
                     title="Connect"
                     aria-label="Connect"
                   >
-                    <FiLink2 className="app-icon" />
+                    <LuLink2 className="app-icon" />
                   </button>
                   <button
                     onClick={() => setShowSettingsDialog(true)}
@@ -249,7 +267,7 @@ export function MainLayout() {
                     title="Settings"
                     aria-label="Settings"
                   >
-                    <FiSettings className="app-icon" />
+                    <LuSettings className="app-icon" />
                   </button>
                 </div>
               </div>

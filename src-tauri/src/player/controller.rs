@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
+use tauri::Manager;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
-use tauri::Manager;
 
 pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String> {
     if state.is_player_connected() {
@@ -354,8 +354,8 @@ pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Optio
 }
 
 pub async fn load_placeholder_if_empty(state: &Arc<AppState>) -> Result<(), String> {
-    let placeholder = resolve_placeholder_path(state)
-        .ok_or_else(|| "Placeholder asset not found".to_string())?;
+    let placeholder =
+        resolve_placeholder_path(state).ok_or_else(|| "Placeholder asset not found".to_string())?;
     let player = state
         .player
         .lock()
@@ -419,8 +419,8 @@ fn should_spawn_player(state: &AppState, kind: PlayerKind) -> bool {
         return true;
     }
     let now = Instant::now();
-    let last_spawn = state.last_player_spawn.lock().clone();
-    let last_kind = state.last_player_kind.lock().clone();
+    let last_spawn = *state.last_player_spawn.lock();
+    let last_kind = *state.last_player_kind.lock();
     let recent = last_spawn
         .map(|instant| now.duration_since(instant) < Duration::from_secs(15))
         .unwrap_or(false);
