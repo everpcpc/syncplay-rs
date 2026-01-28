@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FiEdit2, FiUsers } from "react-icons/fi";
+import { LuPencilLine, LuUsers } from "react-icons/lu";
 import { useSyncplayStore } from "../../store";
 import { RoomManagerDialog } from "./RoomManagerDialog";
 
@@ -19,7 +19,7 @@ export function UserList() {
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <FiUsers className="app-icon app-text-muted" />
+            <LuUsers className="app-icon app-text-muted" />
             <span className="text-sm font-semibold">{currentRoom}</span>
           </div>
           <button
@@ -28,7 +28,7 @@ export function UserList() {
             title="Manage rooms"
             aria-label="Manage rooms"
           >
-            <FiEdit2 className="app-icon" />
+            <LuPencilLine className="app-icon" />
           </button>
         </div>
         <p className="app-text-muted text-sm">Not connected</p>
@@ -41,7 +41,7 @@ export function UserList() {
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <FiUsers className="app-icon app-text-muted" />
+          <LuUsers className="app-icon app-text-muted" />
           <span className="text-sm font-semibold">{currentRoom}</span>
           <span className="text-xs app-text-muted">({users.length})</span>
         </div>
@@ -51,7 +51,7 @@ export function UserList() {
           title="Manage rooms"
           aria-label="Manage rooms"
         >
-          <FiEdit2 className="app-icon" />
+          <LuPencilLine className="app-icon" />
         </button>
       </div>
 

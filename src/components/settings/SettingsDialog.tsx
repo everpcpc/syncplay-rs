@@ -416,66 +416,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     Arguments applied when launching the player
                   </p>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">MPV Socket Path</label>
-                  <input
-                    type="text"
-                    value={config.player.mpv_socket_path}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        player: { ...config.player, mpv_socket_path: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.shared_playlist_enabled}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, shared_playlist_enabled: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Enable shared playlists
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.loop_at_end_of_playlist}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, loop_at_end_of_playlist: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Loop at end of playlist
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.loop_single_files}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, loop_single_files: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Loop single files
-                  </label>
-                </div>
               </div>
             )}
 

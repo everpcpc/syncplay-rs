@@ -1,14 +1,17 @@
 import { useSyncplayStore } from "../../store";
 import {
-  FiChevronLeft,
-  FiChevronRight,
-  FiFolder,
-  FiList,
-  FiPlus,
-  FiShield,
-  FiTrash2,
-  FiX,
-} from "react-icons/fi";
+  LuChevronLeft,
+  LuChevronRight,
+  LuFolder,
+  LuListMusic,
+  LuPlus,
+  LuRepeat,
+  LuRepeat1,
+  LuShield,
+  LuTrash2,
+  LuUsers,
+  LuX,
+} from "react-icons/lu";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -20,12 +23,37 @@ import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
 export function PlaylistPanel() {
   const playlist = useSyncplayStore((state) => state.playlist);
   const connection = useSyncplayStore((state) => state.connection);
+  const config = useSyncplayStore((state) => state.config);
+  const setConfig = useSyncplayStore((state) => state.setConfig);
   const addNotification = useNotificationStore((state) => state.addNotification);
   const [showMediaDirectories, setShowMediaDirectories] = useState(false);
   const [showTrustedDomains, setShowTrustedDomains] = useState(false);
 
   const normalizePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+  const updateUserSetting = async <K extends keyof SyncplayConfig["user"]>(
+    key: K,
+    value: SyncplayConfig["user"][K]
+  ) => {
+    try {
+      const baseConfig = config ?? (await invoke<SyncplayConfig>("get_config"));
+      const nextConfig: SyncplayConfig = {
+        ...baseConfig,
+        user: {
+          ...baseConfig.user,
+          [key]: value,
+        },
+      };
+      await invoke("update_config", { config: nextConfig });
+      setConfig(nextConfig);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        message: "Failed to update playlist settings",
+      });
+    }
+  };
 
   const handleAddFile = async () => {
     if (!connection.connected) return;
@@ -144,7 +172,7 @@ export function PlaylistPanel() {
       <div className="p-4 border-b app-divider app-surface">
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
-            <FiList className="app-icon app-text-muted" />
+            <LuListMusic className="app-icon app-text-muted" />
             <div className="flex items-center gap-2 flex-1">
               <button
                 onClick={handleAddFile}
@@ -153,7 +181,7 @@ export function PlaylistPanel() {
                 title="Add file"
                 aria-label="Add file"
               >
-                <FiPlus className="app-icon" />
+                <LuPlus className="app-icon" />
               </button>
               <button
                 onClick={handleClear}
@@ -162,7 +190,7 @@ export function PlaylistPanel() {
                 title="Clear playlist"
                 aria-label="Clear playlist"
               >
-                <FiTrash2 className="app-icon" />
+                <LuTrash2 className="app-icon" />
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -172,7 +200,7 @@ export function PlaylistPanel() {
                 title="Manage trusted domains"
                 aria-label="Manage trusted domains"
               >
-                <FiShield className="app-icon" />
+                <LuShield className="app-icon" />
               </button>
               <button
                 onClick={() => setShowMediaDirectories(true)}
@@ -180,7 +208,7 @@ export function PlaylistPanel() {
                 title="Manage media directories"
                 aria-label="Manage media directories"
               >
-                <FiFolder className="app-icon" />
+                <LuFolder className="app-icon" />
               </button>
             </div>
           </div>
@@ -209,7 +237,7 @@ export function PlaylistPanel() {
                     title="Remove item"
                     aria-label="Remove item"
                   >
-                    <FiX className="app-icon" />
+                    <LuX className="app-icon" />
                   </button>
                 </div>
               </div>
@@ -220,35 +248,75 @@ export function PlaylistPanel() {
 
       {/* Navigation controls */}
       <div className="p-4 border-t app-divider app-surface">
-        <div className="flex gap-2">
-          <button
-            onClick={handlePrevious}
-            disabled={
-              !connection.connected ||
-              playlist.items.length === 0 ||
-              playlist.currentIndex === null ||
-              playlist.currentIndex === 0
-            }
-            className="btn-neutral app-icon-button disabled:cursor-not-allowed"
-            title="Previous"
-            aria-label="Previous"
-          >
-            <FiChevronLeft className="app-icon" />
-          </button>
-          <button
-            onClick={handleNext}
-            disabled={
-              !connection.connected ||
-              playlist.items.length === 0 ||
-              playlist.currentIndex === null ||
-              playlist.currentIndex >= playlist.items.length - 1
-            }
-            className="btn-neutral app-icon-button disabled:cursor-not-allowed"
-            title="Next"
-            aria-label="Next"
-          >
-            <FiChevronRight className="app-icon" />
-          </button>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex gap-2">
+            <button
+              onClick={handlePrevious}
+              disabled={
+                !connection.connected ||
+                playlist.items.length === 0 ||
+                playlist.currentIndex === null ||
+                playlist.currentIndex === 0
+              }
+              className="btn-neutral app-icon-button disabled:cursor-not-allowed"
+              title="Previous"
+              aria-label="Previous"
+            >
+              <LuChevronLeft className="app-icon" />
+            </button>
+            <button
+              onClick={handleNext}
+              disabled={
+                !connection.connected ||
+                playlist.items.length === 0 ||
+                playlist.currentIndex === null ||
+                playlist.currentIndex >= playlist.items.length - 1
+              }
+              className="btn-neutral app-icon-button disabled:cursor-not-allowed"
+              title="Next"
+              aria-label="Next"
+            >
+              <LuChevronRight className="app-icon" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() =>
+                updateUserSetting("shared_playlist_enabled", !config?.user.shared_playlist_enabled)
+              }
+              className={`btn-neutral app-icon-button ${
+                config?.user.shared_playlist_enabled ? "app-tag-accent" : ""
+              }`}
+              title="Toggle shared playlists"
+              aria-label="Toggle shared playlists"
+            >
+              <LuUsers className="app-icon" />
+            </button>
+            <button
+              onClick={() =>
+                updateUserSetting("loop_at_end_of_playlist", !config?.user.loop_at_end_of_playlist)
+              }
+              className={`btn-neutral app-icon-button ${
+                config?.user.loop_at_end_of_playlist ? "app-tag-accent" : ""
+              }`}
+              title="Toggle loop playlist"
+              aria-label="Toggle loop playlist"
+            >
+              <LuRepeat className="app-icon" />
+            </button>
+            <button
+              onClick={() =>
+                updateUserSetting("loop_single_files", !config?.user.loop_single_files)
+              }
+              className={`btn-neutral app-icon-button ${
+                config?.user.loop_single_files ? "app-tag-accent" : ""
+              }`}
+              title="Toggle loop single file"
+              aria-label="Toggle loop single file"
+            >
+              <LuRepeat1 className="app-icon" />
+            </button>
+          </div>
         </div>
       </div>
 

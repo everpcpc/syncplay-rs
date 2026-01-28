@@ -28,6 +28,7 @@
         "transparent": true,
         "backgroundColor": "#00000000",
         "titleBarStyle": "Overlay",
+        "devtools": true,
         "hiddenTitle": true
       }
     ]

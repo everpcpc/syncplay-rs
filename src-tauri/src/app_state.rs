@@ -1,6 +1,7 @@
 use anyhow::Result;
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 use crate::client::{chat::ChatManager, playlist::Playlist, state::ClientState, sync::SyncEngine};
@@ -8,7 +9,7 @@ use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::connection::Connection;
 use crate::network::messages::HelloMessage;
 use crate::network::ping::PingService;
-use crate::player::backend::PlayerBackend;
+use crate::player::backend::{PlayerBackend, PlayerKind};
 
 /// Global application state
 pub struct AppState {
@@ -44,6 +45,10 @@ pub struct AppState {
     pub ping_service: Arc<Mutex<PingService>>,
     /// Last latency calculation timestamp from server
     pub last_latency_calculation: Arc<Mutex<Option<f64>>>,
+    /// Last time a player process was spawned
+    pub last_player_spawn: Arc<Mutex<Option<Instant>>>,
+    /// Kind of the last spawned player
+    pub last_player_kind: Arc<Mutex<Option<PlayerKind>>>,
 }
 
 impl AppState {
@@ -65,6 +70,8 @@ impl AppState {
             autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
             ping_service: Arc::new(Mutex::new(PingService::default())),
             last_latency_calculation: Arc::new(Mutex::new(None)),
+            last_player_spawn: Arc::new(Mutex::new(None)),
+            last_player_kind: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -116,6 +123,8 @@ impl Default for AppState {
             autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
             ping_service: Arc::new(Mutex::new(PingService::default())),
             last_latency_calculation: Arc::new(Mutex::new(None)),
+            last_player_spawn: Arc::new(Mutex::new(None)),
+            last_player_kind: Arc::new(Mutex::new(None)),
         }
     }
 }

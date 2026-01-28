@@ -82,7 +82,7 @@ mod tests {
                     password: None,
                 }),
                 version: "1.2.255".to_string(),
-                realversion: "1.7.3".to_string(),
+                realversion: "1.7.4".to_string(),
                 features: Some(ClientFeatures {
                     shared_playlists: Some(true),
                     chat: Some(true),
