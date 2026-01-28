@@ -34,6 +34,18 @@ pub async fn update_config<R: Runtime>(
 
     *state.config.lock() = config.clone();
     state.sync_engine.lock().update_from_config(&config.user);
+    {
+        let mut autoplay = state.autoplay.lock();
+        autoplay.enabled = config.user.autoplay_enabled;
+        autoplay.min_users = config.user.autoplay_min_users;
+        autoplay.require_same_filenames = config.user.autoplay_require_same_filenames;
+        autoplay.unpause_action = config.user.unpause_action.clone();
+        if !autoplay.enabled {
+            autoplay.countdown_active = false;
+            autoplay.countdown_remaining = 0;
+        }
+    }
+    state.emit_event("config-updated", config.clone());
 
     Ok(())
 }

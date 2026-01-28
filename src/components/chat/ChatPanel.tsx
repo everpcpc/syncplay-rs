@@ -5,8 +5,10 @@ import { invoke } from "@tauri-apps/api/core";
 export function ChatPanel() {
   const messages = useSyncplayStore((state) => state.messages);
   const connection = useSyncplayStore((state) => state.connection);
+  const config = useSyncplayStore((state) => state.config);
   const [inputValue, setInputValue] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatInputEnabled = config?.user.chat_input_enabled ?? true;
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -14,7 +16,7 @@ export function ChatPanel() {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || !connection.connected) return;
+    if (!inputValue.trim() || !connection.connected || !chatInputEnabled) return;
 
     try {
       await invoke("send_chat_message", { message: inputValue });
@@ -82,10 +84,14 @@ export function ChatPanel() {
           onChange={(e) => setInputValue(e.target.value)}
           onKeyPress={handleKeyPress}
           placeholder={
-            connection.connected ? "Type a message... (or /help for commands)" : "Not connected"
+            !connection.connected
+              ? "Not connected"
+              : chatInputEnabled
+                ? "Type a message... (or /help for commands)"
+                : "Chat input disabled"
           }
           className="w-full app-input px-4 py-2 rounded-md focus:outline-none focus:border-blue-500"
-          disabled={!connection.connected}
+          disabled={!connection.connected || !chatInputEnabled}
         />
       </div>
     </div>

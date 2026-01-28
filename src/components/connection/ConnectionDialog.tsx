@@ -2,39 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
+import { PublicServer, SyncplayConfig } from "../../types/config";
 
 interface ConnectionDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface SyncplayConfig {
-  server: {
-    host: string;
-    port: number;
-    password: string | null;
-  };
-  user: {
-    username: string;
-    default_room: string;
-    room_list: string[];
-  };
-  player: {
-    player_path: string;
-    mpv_socket_path: string;
-    media_directories: string[];
-  };
-  recent_servers: Array<{
-    host: string;
-    port: number;
-    password: string | null;
-  }>;
-}
-
 interface ComboBoxProps {
   label: string;
   value: string;
-  options: string[];
+  options: Array<{ label: string; value: string }>;
   onChange: (value: string) => void;
   onSelect?: (value: string) => void;
   placeholder?: string;
@@ -67,17 +45,26 @@ function ComboBox({
   }, []);
 
   const query = value.trim().toLowerCase();
-  const normalizedOptions = options.map((option) => option.trim()).filter((option) => option);
-  const uniqueOptions = Array.from(new Set(normalizedOptions));
+  const normalizedOptions = options
+    .map((option) => ({
+      label: option.label.trim(),
+      value: option.value.trim(),
+    }))
+    .filter((option) => option.label && option.value);
+  const uniqueOptions = Array.from(
+    new Map(normalizedOptions.map((option) => [option.value, option])).values()
+  );
   const filteredOptions = uniqueOptions.filter((option) =>
-    query ? option.toLowerCase().includes(query) : true
+    query
+      ? option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query)
+      : true
   );
 
-  const handleSelect = (option: string) => {
+  const handleSelect = (option: { label: string; value: string }) => {
     if (onSelect) {
-      onSelect(option);
+      onSelect(option.value);
     } else {
-      onChange(option);
+      onChange(option.value);
     }
     setIsOpen(false);
   };
@@ -122,15 +109,18 @@ function ComboBox({
                 {filteredOptions.map((option) => (
                   <button
                     type="button"
-                    key={option}
+                    key={option.value}
                     onMouseDown={(event) => {
                       event.preventDefault();
                       handleSelect(option);
                     }}
                     className="w-full text-left px-3 py-2 text-sm app-dropdown-item"
-                    aria-selected={option === value}
+                    aria-selected={option.value === value}
                   >
-                    {option}
+                    <div className="text-sm">{option.label}</div>
+                    {option.label !== option.value && (
+                      <div className="text-xs app-text-muted">{option.value}</div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -156,8 +146,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const serverOptions =
-    config?.recent_servers.map((server) => `${server.host}:${server.port}`) ?? [];
+  const serverOptions = buildServerOptions(config?.recent_servers ?? [], config?.public_servers);
   const roomOptions = config?.user.room_list ?? [];
 
   useEffect(() => {
@@ -247,6 +236,22 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
     next.unshift({ host, port, password });
     return next.slice(0, 10);
   };
+
+  function buildServerOptions(
+    recent: SyncplayConfig["recent_servers"],
+    publicServers?: PublicServer[]
+  ) {
+    const recentOptions = recent.map((server) => ({
+      label: `${server.host}:${server.port}`,
+      value: `${server.host}:${server.port}`,
+    }));
+    const publicOptions =
+      publicServers?.map((server) => ({
+        label: server.name,
+        value: server.address,
+      })) ?? [];
+    return [...publicOptions, ...recentOptions];
+  }
 
   const handleConnect = async (saveConfig: boolean) => {
     if (!formData.username.trim()) {
@@ -383,7 +388,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
             <ComboBox
               label="Room"
               value={formData.room}
-              options={roomOptions}
+              options={roomOptions.map((room) => ({ label: room, value: room }))}
               onChange={(value) => setFormData({ ...formData, room: value })}
               placeholder="default"
             />

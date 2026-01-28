@@ -1,9 +1,14 @@
 use crate::app_state::{AppState, PlayerStateEvent};
-use crate::config::SyncplayConfig;
-use crate::network::messages::{FileInfo, PlayState, ProtocolMessage, SetMessage, StateMessage};
+use crate::config::{SyncplayConfig, UnpauseAction};
+use crate::network::messages::{
+    FileInfo, PlayState, ProtocolMessage, ReadyState, SetMessage, StateMessage,
+};
 use crate::player::events::{EndFileReason, MpvPlayerEvent};
 use crate::player::mpv_ipc::MpvIpc;
 use crate::player::properties::PlayerState;
+use crate::utils::{
+    apply_privacy, is_trustable_and_trusted, is_url, same_filename, PRIVACY_HIDDEN_FILENAME,
+};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -56,17 +61,39 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                 continue;
             }
 
-            let filename_changed = last_sent
-                .as_ref()
-                .map(|prev| prev.filename != player_state.filename)
-                .unwrap_or(true);
+            if let Some(prev) = last_sent.as_ref() {
+                if prev.paused == Some(true) && player_state.paused == Some(false) {
+                    let suppressed = {
+                        let mut guard = state.suppress_unpause_check.lock();
+                        let suppressed = *guard;
+                        if suppressed {
+                            *guard = false;
+                        }
+                        suppressed
+                    };
+                    if !suppressed {
+                        let config = state.config.lock().clone();
+                        if !instaplay_conditions_met(&state, &config) {
+                            if let Err(e) = mpv.set_paused(true).await {
+                                tracing::warn!("Failed to block unpause: {}", e);
+                            }
+                            if !state.client_state.is_ready() {
+                                if let Err(e) = send_ready_state(&state, true, true) {
+                                    tracing::warn!("Failed to send ready state: {}", e);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
 
-            if filename_changed {
+            if file_info_changed(&player_state, last_sent.as_ref()) {
                 let mut suppress_guard = state.suppress_next_file_update.lock();
                 if *suppress_guard {
                     *suppress_guard = false;
-                } else if let Some(filename) = player_state.filename.as_ref() {
-                    send_file_update(&state, filename);
+                } else {
+                    send_file_update(&state, &player_state);
                 }
             }
 
@@ -97,6 +124,34 @@ pub async fn load_media_by_name(
     send_update: bool,
 ) -> Result<(), String> {
     let config = state.config.lock().clone();
+    if is_url(filename) {
+        let (trustable, trusted) = is_trustable_and_trusted(
+            filename,
+            &config.user.trusted_domains,
+            config.user.only_switch_to_trusted_domains,
+        );
+        if !trustable || !trusted {
+            return Err("URL is not trusted".to_string());
+        }
+        ensure_mpv_connected(state).await?;
+        let mpv = state
+            .mpv
+            .lock()
+            .clone()
+            .ok_or_else(|| "MPV not connected".to_string())?;
+        mpv.load_file(filename)
+            .await
+            .map_err(|e| format!("Failed to load URL: {}", e))?;
+        state.client_state.set_file(Some(filename.to_string()));
+        if send_update {
+            let mpv_state = mpv.get_state();
+            send_file_update(state, &mpv_state);
+        } else {
+            *state.suppress_next_file_update.lock() = true;
+        }
+        return Ok(());
+    }
+
     let media_path = resolve_media_path(&config.player.media_directories, filename)
         .ok_or_else(|| format!("File not found in media directories: {}", filename))?;
 
@@ -113,7 +168,13 @@ pub async fn load_media_by_name(
 
     state.client_state.set_file(Some(filename.to_string()));
     if send_update {
-        send_file_update(state, filename);
+        let mpv_state = state
+            .mpv
+            .lock()
+            .clone()
+            .map(|mpv| mpv.get_state())
+            .unwrap_or_default();
+        send_file_update(state, &mpv_state);
     } else {
         *state.suppress_next_file_update.lock() = true;
     }
@@ -122,6 +183,9 @@ pub async fn load_media_by_name(
 }
 
 pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Option<PathBuf> {
+    if filename == PRIVACY_HIDDEN_FILENAME {
+        return None;
+    }
     for directory in media_directories {
         let directory = directory.trim();
         if directory.is_empty() {
@@ -132,6 +196,29 @@ pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Optio
             return Some(candidate);
         }
     }
+
+    for directory in media_directories {
+        let directory = directory.trim();
+        if directory.is_empty() {
+            continue;
+        }
+        let dir_path = Path::new(directory);
+        let entries = match std::fs::read_dir(dir_path) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let candidate_name = path.file_name()?.to_string_lossy();
+            if same_filename(Some(filename), Some(candidate_name.as_ref())) {
+                return Some(path);
+            }
+        }
+    }
+
     None
 }
 
@@ -150,12 +237,17 @@ fn start_mpv_process_if_needed(
     };
 
     let mut cmd = Command::new(player_path);
+    let mut args = config.player.player_arguments.clone();
+    if let Some(extra_args) = config.player.per_player_arguments.get(player_path) {
+        args.extend(extra_args.clone());
+    }
     cmd.arg("--idle=yes")
         .arg("--no-terminal")
         .arg(format!(
             "--input-ipc-server={}",
             config.player.mpv_socket_path
         ))
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -173,54 +265,11 @@ fn spawn_event_loop(
 ) {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            match event {
-                MpvPlayerEvent::EndFile {
-                    reason: EndFileReason::Eof,
-                } => {
-                    if let Some(next) = state.playlist.next() {
-                        let items: Vec<String> = state
-                            .playlist
-                            .get_items()
-                            .iter()
-                            .map(|item| item.filename.clone())
-                            .collect();
-                        state.emit_event(
-                            "playlist-updated",
-                            crate::app_state::PlaylistEvent {
-                                items,
-                                current_index: state.playlist.get_current_index(),
-                            },
-                        );
-                        if let Some(index) = state.playlist.get_current_index() {
-                            let username = state.client_state.get_username();
-                            let message = ProtocolMessage::Set {
-                                Set: SetMessage {
-                                    room: None,
-                                    file: None,
-                                    user: None,
-                                    ready: None,
-                                    playlist_index: Some(
-                                        crate::network::messages::PlaylistIndexUpdate {
-                                            user: Some(username),
-                                            index: Some(index),
-                                        },
-                                    ),
-                                    playlist_change: None,
-                                    features: None,
-                                },
-                            };
-                            if let Some(connection) = state.connection.lock().clone() {
-                                if let Err(e) = connection.send(message) {
-                                    tracing::warn!("Failed to send playlist index update: {}", e);
-                                }
-                            }
-                        }
-                        if let Err(e) = load_media_by_name(&state, &next.filename, true).await {
-                            tracing::warn!("Failed to load next item: {}", e);
-                        }
-                    }
-                }
-                _ => {}
+            if let MpvPlayerEvent::EndFile {
+                reason: EndFileReason::Eof,
+            } = event
+            {
+                handle_end_of_file(&state).await;
             }
         }
     });
@@ -239,18 +288,41 @@ fn emit_player_state(state: &Arc<AppState>, player_state: &PlayerState) {
     );
 }
 
-fn send_file_update(state: &Arc<AppState>, filename: &str) {
-    state.client_state.set_file(Some(filename.to_string()));
+fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
+    if player_state.filename.is_none() {
+        return;
+    }
+    let config = state.config.lock().clone();
+    let raw_name = player_state.filename.clone();
+    let raw_size = player_state
+        .path
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|metadata| metadata.len());
+    let raw_duration = player_state.duration;
+
+    let (name, size) = apply_privacy(
+        raw_name.clone(),
+        raw_size,
+        &config.user.filename_privacy_mode,
+        &config.user.filesize_privacy_mode,
+    );
+
+    state.client_state.set_file(raw_name);
+    state.client_state.set_file_size(size.clone());
+    state.client_state.set_file_duration(raw_duration);
+
     let Some(connection) = state.connection.lock().clone() else {
         return;
     };
+
     let message = ProtocolMessage::Set {
         Set: SetMessage {
             room: None,
             file: Some(FileInfo {
-                name: Some(filename.to_string()),
-                size: None,
-                duration: None,
+                name,
+                size,
+                duration: raw_duration,
             }),
             user: None,
             ready: None,
@@ -292,11 +364,21 @@ fn should_send_state(player_state: &PlayerState, last_sent: Option<&PlayerStateS
     }
 }
 
+fn file_info_changed(player_state: &PlayerState, last_sent: Option<&PlayerStateSnapshot>) -> bool {
+    match last_sent {
+        None => true,
+        Some(prev) => {
+            prev.filename != player_state.filename || prev.duration != player_state.duration
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PlayerStateSnapshot {
     filename: Option<String>,
     position: Option<f64>,
     paused: Option<bool>,
+    duration: Option<f64>,
 }
 
 impl PlayerStateSnapshot {
@@ -305,8 +387,146 @@ impl PlayerStateSnapshot {
             filename: state.filename.clone(),
             position: state.position,
             paused: state.paused,
+            duration: state.duration,
         }
     }
+}
+
+async fn handle_end_of_file(state: &Arc<AppState>) {
+    let config = state.config.lock().clone();
+    if !config.user.shared_playlist_enabled {
+        return;
+    }
+
+    if let Some(next) = state
+        .playlist
+        .next_with_loop(config.user.loop_at_end_of_playlist)
+    {
+        let items: Vec<String> = state
+            .playlist
+            .get_items()
+            .iter()
+            .map(|item| item.filename.clone())
+            .collect();
+        state.emit_event(
+            "playlist-updated",
+            crate::app_state::PlaylistEvent {
+                items,
+                current_index: state.playlist.get_current_index(),
+            },
+        );
+        if let Some(index) = state.playlist.get_current_index() {
+            let username = state.client_state.get_username();
+            let message = ProtocolMessage::Set {
+                Set: SetMessage {
+                    room: None,
+                    file: None,
+                    user: None,
+                    ready: None,
+                    playlist_index: Some(crate::network::messages::PlaylistIndexUpdate {
+                        user: Some(username),
+                        index: Some(index),
+                    }),
+                    playlist_change: None,
+                    features: None,
+                },
+            };
+            if let Some(connection) = state.connection.lock().clone() {
+                if let Err(e) = connection.send(message) {
+                    tracing::warn!("Failed to send playlist index update: {}", e);
+                }
+            }
+        }
+        if let Err(e) = load_media_by_name(state, &next.filename, true).await {
+            tracing::warn!("Failed to load next item: {}", e);
+        }
+    } else if config.user.loop_single_files {
+        if let Some(current) = state.playlist.get_current_item() {
+            if let Err(e) = load_media_by_name(state, &current.filename, true).await {
+                tracing::warn!("Failed to loop current item: {}", e);
+            }
+        } else if let Some(current) = state.client_state.get_file() {
+            if let Err(e) = load_media_by_name(state, &current, true).await {
+                tracing::warn!("Failed to loop current file: {}", e);
+            }
+        }
+    }
+}
+
+fn instaplay_conditions_met(state: &Arc<AppState>, config: &SyncplayConfig) -> bool {
+    match config.user.unpause_action {
+        UnpauseAction::Always => true,
+        UnpauseAction::IfAlreadyReady => state.client_state.is_ready(),
+        UnpauseAction::IfOthersReady => {
+            all_other_users_ready(state, &state.client_state.get_room())
+        }
+        UnpauseAction::IfMinUsersReady => {
+            if !all_other_users_ready(state, &state.client_state.get_room()) {
+                return false;
+            }
+            let min_users = config.user.autoplay_min_users;
+            if min_users > 0 {
+                let count = users_in_room_count(
+                    state,
+                    &state.client_state.get_room(),
+                    &state.client_state.get_username(),
+                );
+                return count >= min_users as usize;
+            }
+            true
+        }
+    }
+}
+
+fn all_other_users_ready(state: &Arc<AppState>, room: &str) -> bool {
+    let username = state.client_state.get_username();
+    for user in state.client_state.get_users_in_room(room) {
+        if user.username != username && !user.is_ready {
+            return false;
+        }
+    }
+    true
+}
+
+fn users_in_room_count(state: &Arc<AppState>, room: &str, username: &str) -> usize {
+    let users = state.client_state.get_users_in_room(room);
+    let mut count = users.len();
+    if !users.iter().any(|user| user.username == username) {
+        count += 1;
+    }
+    count
+}
+
+fn send_ready_state(
+    state: &Arc<AppState>,
+    is_ready: bool,
+    manually_initiated: bool,
+) -> Result<(), String> {
+    state.client_state.set_ready(is_ready);
+    let username = state.client_state.get_username();
+    let message = ProtocolMessage::Set {
+        Set: SetMessage {
+            room: None,
+            file: None,
+            user: None,
+            ready: Some(ReadyState {
+                username: Some(username),
+                is_ready: Some(is_ready),
+                manually_initiated: Some(manually_initiated),
+                set_by: None,
+            }),
+            playlist_index: None,
+            playlist_change: None,
+            features: None,
+        },
+    };
+
+    let Some(connection) = state.connection.lock().clone() else {
+        return Err("Not connected to server".to_string());
+    };
+    connection
+        .send(message)
+        .map_err(|e| format!("Failed to send ready state: {}", e))
 }
 
 #[cfg(test)]

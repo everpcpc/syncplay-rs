@@ -2,12 +2,16 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::network::messages::FileSizeInfo;
+
 /// User information
 #[derive(Debug, Clone)]
 pub struct User {
     pub username: String,
     pub room: String,
     pub file: Option<String>,
+    pub file_size: Option<FileSizeInfo>,
+    pub file_duration: Option<f64>,
     pub is_ready: bool,
     pub is_controller: bool,
 }
@@ -28,6 +32,8 @@ pub struct ClientState {
     room: RwLock<String>,
     /// Current file
     file: RwLock<Option<String>>,
+    file_size: RwLock<Option<FileSizeInfo>>,
+    file_duration: RwLock<Option<f64>>,
     /// User list (username -> User)
     users: RwLock<HashMap<String, User>>,
     /// Global playback state
@@ -44,6 +50,8 @@ impl ClientState {
             username: RwLock::new(String::new()),
             room: RwLock::new(String::new()),
             file: RwLock::new(None),
+            file_size: RwLock::new(None),
+            file_duration: RwLock::new(None),
             users: RwLock::new(HashMap::new()),
             global_state: RwLock::new(GlobalPlayState {
                 position: 0.0,
@@ -80,6 +88,22 @@ impl ClientState {
 
     pub fn set_file(&self, file: Option<String>) {
         *self.file.write() = file;
+    }
+
+    pub fn get_file_size(&self) -> Option<FileSizeInfo> {
+        self.file_size.read().clone()
+    }
+
+    pub fn set_file_size(&self, size: Option<FileSizeInfo>) {
+        *self.file_size.write() = size;
+    }
+
+    pub fn get_file_duration(&self) -> Option<f64> {
+        *self.file_duration.read()
+    }
+
+    pub fn set_file_duration(&self, duration: Option<f64>) {
+        *self.file_duration.write() = duration;
     }
 
     // User list methods
@@ -149,6 +173,8 @@ impl Default for ClientState {
             username: RwLock::new(String::new()),
             room: RwLock::new(String::new()),
             file: RwLock::new(None),
+            file_size: RwLock::new(None),
+            file_duration: RwLock::new(None),
             users: RwLock::new(HashMap::new()),
             global_state: RwLock::new(GlobalPlayState {
                 position: 0.0,

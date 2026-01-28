@@ -21,7 +21,7 @@ pub enum ConnectionState {
 }
 
 enum ConnectionCommand {
-    Send(ProtocolMessage),
+    Send(Box<ProtocolMessage>),
     UpgradeTls {
         domain: String,
         response: oneshot::Sender<Result<()>>,
@@ -30,8 +30,8 @@ enum ConnectionCommand {
 }
 
 enum Transport {
-    Plain(Framed<TcpStream, SyncplayCodec>),
-    Tls(Framed<tokio_rustls::client::TlsStream<TcpStream>, SyncplayCodec>),
+    Plain(Box<Framed<TcpStream, SyncplayCodec>>),
+    Tls(Box<Framed<tokio_rustls::client::TlsStream<TcpStream>, SyncplayCodec>>),
     Empty,
 }
 
@@ -47,8 +47,8 @@ impl Transport {
 
     async fn next_message(&mut self) -> Option<Result<ProtocolMessage>> {
         match self {
-            Transport::Plain(framed) => framed.next().await.map(|r| r.map_err(|e| e.into())),
-            Transport::Tls(framed) => framed.next().await.map(|r| r.map_err(|e| e.into())),
+            Transport::Plain(framed) => framed.next().await,
+            Transport::Tls(framed) => framed.next().await,
             Transport::Empty => None,
         }
     }
@@ -56,9 +56,10 @@ impl Transport {
     async fn upgrade_tls(&mut self, domain: &str) -> Result<()> {
         match std::mem::replace(self, Transport::Empty) {
             Transport::Plain(framed) => {
+                let framed = *framed;
                 let stream = framed.into_inner();
                 let tls_stream = upgrade_to_tls(stream, domain).await?;
-                *self = Transport::Tls(Framed::new(tls_stream, SyncplayCodec::new()));
+                *self = Transport::Tls(Box::new(Framed::new(tls_stream, SyncplayCodec::new())));
                 Ok(())
             }
             Transport::Tls(framed) => {
@@ -113,7 +114,7 @@ impl Connection {
 
         // Create framed stream with codec
         let framed = Framed::new(stream, SyncplayCodec::new());
-        let mut transport = Transport::Plain(framed);
+        let mut transport = Transport::Plain(Box::new(framed));
 
         // Create channels for bidirectional communication
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<ConnectionCommand>();
@@ -130,7 +131,7 @@ impl Connection {
                     Some(cmd) = cmd_rx.recv() => {
                         match cmd {
                             ConnectionCommand::Send(msg) => {
-                                if let Err(e) = transport.send(msg).await {
+                                if let Err(e) = transport.send(*msg).await {
                                     error!("Failed to send message: {}", e);
                                     break;
                                 }
@@ -179,7 +180,7 @@ impl Connection {
     /// Send a message to the server
     pub fn send(&self, message: ProtocolMessage) -> Result<()> {
         if let Some(tx) = self.tx.lock().as_ref() {
-            tx.send(ConnectionCommand::Send(message))
+            tx.send(ConnectionCommand::Send(Box::new(message)))
                 .context("Failed to send message to connection")?;
             Ok(())
         } else {

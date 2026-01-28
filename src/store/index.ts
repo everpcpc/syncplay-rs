@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { SyncplayConfig } from "../types/config";
 
 // Type definitions matching backend events
 interface ConnectionState {
@@ -42,6 +43,7 @@ interface SyncplayStore {
   messages: ChatMessage[];
   playlist: PlaylistState;
   player: PlayerState;
+  config: SyncplayConfig | null;
 
   // Actions
   setConnectionStatus: (status: ConnectionState) => void;
@@ -49,6 +51,7 @@ interface SyncplayStore {
   addMessage: (message: ChatMessage) => void;
   setPlaylist: (playlist: PlaylistState) => void;
   setPlayerState: (state: PlayerState) => void;
+  setConfig: (config: SyncplayConfig) => void;
 
   // Event listener setup
   setupEventListeners: () => void;
@@ -75,6 +78,7 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
     paused: true,
     speed: 1.0,
   },
+  config: null,
 
   // Actions
   setConnectionStatus: (status) =>
@@ -100,6 +104,11 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
   setPlayerState: (playerState) =>
     set((state) => ({
       player: { ...state.player, ...playerState },
+    })),
+
+  setConfig: (config) =>
+    set(() => ({
+      config,
     })),
 
   // Setup event listeners from Tauri backend
@@ -147,6 +156,13 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
     listenSafe<PlayerState>("player-state-changed", (event) => {
       set((state) => ({
         player: { ...state.player, ...event.payload },
+      }));
+    });
+
+    // Config updates
+    listenSafe<SyncplayConfig>("config-updated", (event) => {
+      set(() => ({
+        config: event.payload,
       }));
     });
   },

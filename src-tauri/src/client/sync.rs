@@ -25,6 +25,9 @@ pub struct SyncEngine {
     slowdown_threshold: f64,
     slowdown_reset_threshold: f64,
     slowdown_rate: f64,
+    slow_on_desync: bool,
+    rewind_on_desync: bool,
+    fastforward_on_desync: bool,
 }
 
 impl SyncEngine {
@@ -34,8 +37,11 @@ impl SyncEngine {
             seek_threshold_rewind: 4.0,
             seek_threshold_fastforward: 5.0,
             slowdown_threshold: 1.5,
-            slowdown_reset_threshold: 0.5,
+            slowdown_reset_threshold: 0.1,
             slowdown_rate: 0.95,
+            slow_on_desync: true,
+            rewind_on_desync: true,
+            fastforward_on_desync: true,
         }
     }
 
@@ -45,6 +51,9 @@ impl SyncEngine {
         self.slowdown_threshold = prefs.slowdown_threshold;
         self.slowdown_reset_threshold = prefs.slowdown_reset_threshold;
         self.slowdown_rate = prefs.slowdown_rate;
+        self.slow_on_desync = prefs.slow_on_desync && !prefs.dont_slow_down_with_me;
+        self.rewind_on_desync = prefs.rewind_on_desync;
+        self.fastforward_on_desync = prefs.fastforward_on_desync;
     }
 
     pub fn slowdown_rate(&self) -> f64 {
@@ -93,7 +102,7 @@ impl SyncEngine {
         // Only sync position if both are playing or both are paused
         if local_paused == global_paused {
             // Check if we need to seek
-            if diff.abs() > self.seek_threshold_rewind && diff < 0.0 {
+            if self.rewind_on_desync && diff.abs() > self.seek_threshold_rewind && diff < 0.0 {
                 // We're behind, need to seek forward
                 info!(
                     "Behind by {:.2}s (threshold: {:.2}s) - seeking forward",
@@ -102,7 +111,7 @@ impl SyncEngine {
                 );
                 actions.push(SyncAction::Seek(adjusted_global_position));
                 self.slowdown_active = false;
-            } else if diff > self.seek_threshold_fastforward {
+            } else if self.fastforward_on_desync && diff > self.seek_threshold_fastforward {
                 // We're ahead, need to seek backward
                 info!(
                     "Ahead by {:.2}s (threshold: {:.2}s) - seeking backward",
@@ -110,7 +119,8 @@ impl SyncEngine {
                 );
                 actions.push(SyncAction::Seek(adjusted_global_position));
                 self.slowdown_active = false;
-            } else if !global_paused && diff.abs() > self.slowdown_threshold {
+            } else if self.slow_on_desync && !global_paused && diff.abs() > self.slowdown_threshold
+            {
                 // Minor desync while playing - apply slowdown
                 if !self.slowdown_active {
                     info!(
@@ -128,6 +138,10 @@ impl SyncEngine {
                     diff.abs(),
                     self.slowdown_reset_threshold
                 );
+                actions.push(SyncAction::ResetSpeed);
+                self.slowdown_active = false;
+            } else if self.slowdown_active && !self.slow_on_desync {
+                // Slowdown disabled, reset to normal speed.
                 actions.push(SyncAction::ResetSpeed);
                 self.slowdown_active = false;
             }

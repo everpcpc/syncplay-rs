@@ -10,21 +10,7 @@ import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { applyTheme, normalizeTheme, ThemePreference } from "../../services/theme";
-
-interface SyncplayConfig {
-  server: {
-    host: string;
-    port: number;
-    password: string | null;
-  };
-  user: {
-    username: string;
-    default_room: string;
-    show_playlist: boolean;
-    auto_connect: boolean;
-    theme: string;
-  };
-}
+import { SyncplayConfig } from "../../types/config";
 
 export function MainLayout() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
@@ -32,8 +18,11 @@ export function MainLayout() {
   const [showPlaylist, setShowPlaylist] = useState(true);
   const [theme, setTheme] = useState<ThemePreference>("dark");
   const connection = useSyncplayStore((state) => state.connection);
+  const config = useSyncplayStore((state) => state.config);
+  const setConfig = useSyncplayStore((state) => state.setConfig);
   const addNotification = useNotificationStore((state) => state.addNotification);
   const initializedRef = useRef(false);
+  const showPlaylistRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -42,12 +31,19 @@ export function MainLayout() {
     const initFromConfig = async () => {
       try {
         const config = await invoke<SyncplayConfig>("get_config");
+        setConfig(config);
         setShowPlaylist(config.user.show_playlist);
         const normalizedTheme = normalizeTheme(config.user.theme);
         setTheme(normalizedTheme);
         applyTheme(normalizedTheme);
 
-        if (config.user.auto_connect && !connection.connected && config.user.username.trim()) {
+        if (config.user.force_gui_prompt) {
+          setShowConnectionDialog(true);
+        } else if (
+          config.user.auto_connect &&
+          !connection.connected &&
+          config.user.username.trim()
+        ) {
           try {
             await invoke("connect_to_server", {
               host: config.server.host,
@@ -72,7 +68,18 @@ export function MainLayout() {
     };
 
     initFromConfig();
-  }, [connection.connected, addNotification]);
+  }, [connection.connected, addNotification, setConfig]);
+
+  useEffect(() => {
+    if (!config) return;
+    if (showPlaylistRef.current !== config.user.show_playlist) {
+      showPlaylistRef.current = config.user.show_playlist;
+      setShowPlaylist(config.user.show_playlist);
+    }
+    const normalizedTheme = normalizeTheme(config.user.theme);
+    setTheme(normalizedTheme);
+    applyTheme(normalizedTheme);
+  }, [config]);
 
   const handleToggleTheme = async () => {
     const previousTheme = theme;

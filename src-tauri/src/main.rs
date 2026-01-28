@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod network;
 mod player;
+mod utils;
 
 use app_state::AppState;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

@@ -6,6 +6,7 @@ use crate::network::messages::ProtocolMessage;
 use crate::network::messages::{
     ChatMessage as ProtocolChatMessage, ReadyState, RoomInfo, SetMessage,
 };
+use crate::utils::truncate_text;
 use std::sync::Arc;
 use tauri::State;
 
@@ -14,6 +15,18 @@ pub async fn send_chat_message(
     message: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    let config = state.config.lock().clone();
+    if !config.user.chat_input_enabled {
+        return Err("Chat input is disabled".to_string());
+    }
+
+    let max_length = 150usize;
+    let message = truncate_text(trimmed, max_length);
     tracing::info!("Sending chat message: {}", message);
 
     // Check if connected

@@ -145,7 +145,28 @@ impl Playlist {
 
         let next_index = match *current {
             Some(idx) if idx + 1 < items.len() => idx + 1,
-            Some(_) => 0, // Wrap around to beginning
+            Some(_) => return None,
+            None => 0,
+        };
+
+        *current = Some(next_index);
+        info!("Moving to next item: index {}", next_index);
+        items.get(next_index).cloned()
+    }
+
+    /// Move to next item with optional loop
+    pub fn next_with_loop(&self, loop_at_end: bool) -> Option<PlaylistItem> {
+        let items = self.items.read();
+        let mut current = self.current_index.write();
+
+        if items.is_empty() {
+            return None;
+        }
+
+        let next_index = match *current {
+            Some(idx) if idx + 1 < items.len() => idx + 1,
+            Some(_) if loop_at_end => 0,
+            Some(_) => return None,
             None => 0,
         };
 
@@ -164,9 +185,9 @@ impl Playlist {
         }
 
         let prev_index = match *current {
-            Some(0) => items.len() - 1, // Wrap around to end
+            Some(0) => return None,
             Some(idx) => idx - 1,
-            None => items.len() - 1,
+            None => return None,
         };
 
         *current = Some(prev_index);
@@ -278,14 +299,25 @@ mod tests {
         playlist.next();
         assert_eq!(playlist.get_current_index(), Some(2));
 
-        // Wrap around
-        playlist.next();
-        assert_eq!(playlist.get_current_index(), Some(0));
+        // End of list should not wrap
+        assert!(playlist.next().is_none());
+        assert_eq!(playlist.get_current_index(), Some(2));
 
         // Move to previous
         let item = playlist.previous();
-        assert_eq!(item.unwrap().filename, "file3.mp4");
-        assert_eq!(playlist.get_current_index(), Some(2));
+        assert_eq!(item.unwrap().filename, "file2.mp4");
+        assert_eq!(playlist.get_current_index(), Some(1));
+    }
+
+    #[test]
+    fn test_playlist_navigation_with_loop() {
+        let playlist = Playlist::new();
+        playlist.set_items(vec!["file1.mp4".to_string(), "file2.mp4".to_string()]);
+        playlist.set_current_index(1);
+
+        let item = playlist.next_with_loop(true).unwrap();
+        assert_eq!(item.filename, "file1.mp4");
+        assert_eq!(playlist.get_current_index(), Some(0));
     }
 
     #[test]

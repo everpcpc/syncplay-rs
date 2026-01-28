@@ -172,9 +172,16 @@ pub struct FileInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
+    pub size: Option<FileSizeInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FileSizeInfo {
+    Number(u64),
+    Text(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

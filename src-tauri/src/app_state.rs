@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 use crate::client::{chat::ChatManager, playlist::Playlist, state::ClientState, sync::SyncEngine};
-use crate::config::SyncplayConfig;
+use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::connection::Connection;
 use crate::network::messages::HelloMessage;
 use crate::player::mpv_ipc::MpvIpc;
@@ -29,12 +29,16 @@ pub struct AppState {
     pub config: Arc<Mutex<SyncplayConfig>>,
     /// Suppress next file update for server-driven loads
     pub suppress_next_file_update: Arc<Mutex<bool>>,
+    /// Suppress unpause checks for remote updates
+    pub suppress_unpause_check: Arc<Mutex<bool>>,
     /// Last hello payload (for TLS re-handshake)
     pub last_hello: Arc<Mutex<Option<HelloMessage>>>,
     /// Whether hello has been sent for the current connection
     pub hello_sent: Arc<Mutex<bool>>,
     /// Tauri app handle for event emission
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
+    /// Autoplay countdown state
+    pub autoplay: Arc<Mutex<AutoPlayState>>,
 }
 
 impl AppState {
@@ -49,9 +53,11 @@ impl AppState {
             sync_engine: Arc::new(Mutex::new(SyncEngine::new())),
             config: Arc::new(Mutex::new(SyncplayConfig::default())),
             suppress_next_file_update: Arc::new(Mutex::new(false)),
+            suppress_unpause_check: Arc::new(Mutex::new(false)),
             last_hello: Arc::new(Mutex::new(None)),
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
+            autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
         })
     }
 
@@ -96,9 +102,34 @@ impl Default for AppState {
             sync_engine: Arc::new(Mutex::new(SyncEngine::new())),
             config: Arc::new(Mutex::new(SyncplayConfig::default())),
             suppress_next_file_update: Arc::new(Mutex::new(false)),
+            suppress_unpause_check: Arc::new(Mutex::new(false)),
             last_hello: Arc::new(Mutex::new(None)),
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
+            autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoPlayState {
+    pub enabled: bool,
+    pub min_users: i32,
+    pub require_same_filenames: bool,
+    pub unpause_action: UnpauseAction,
+    pub countdown_active: bool,
+    pub countdown_remaining: i32,
+}
+
+impl Default for AutoPlayState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_users: -1,
+            require_same_filenames: true,
+            unpause_action: UnpauseAction::IfOthersReady,
+            countdown_active: false,
+            countdown_remaining: 0,
         }
     }
 }

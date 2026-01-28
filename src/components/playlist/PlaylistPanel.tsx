@@ -2,12 +2,7 @@ import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-
-interface SyncplayConfig {
-  player: {
-    media_directories: string[];
-  };
-}
+import { SyncplayConfig } from "../../types/config";
 
 export function PlaylistPanel() {
   const playlist = useSyncplayStore((state) => state.playlist);

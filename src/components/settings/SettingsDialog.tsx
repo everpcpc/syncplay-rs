@@ -2,34 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getAppliedTheme } from "../../services/theme";
 import { open } from "@tauri-apps/plugin-dialog";
-
-interface ServerConfig {
-  host: string;
-  port: number;
-  password: string | null;
-}
-
-interface UserPreferences {
-  username: string;
-  default_room: string;
-  room_list: string[];
-  theme: string;
-  seek_threshold_rewind: number;
-  seek_threshold_fastforward: number;
-  slowdown_threshold: number;
-  slowdown_reset_threshold: number;
-  slowdown_rate: number;
-  show_osd: boolean;
-  osd_duration: number;
-  show_playlist: boolean;
-  auto_connect: boolean;
-}
-
-interface PlayerConfig {
-  player_path: string;
-  mpv_socket_path: string;
-  media_directories: string[];
-}
+import {
+  ChatInputPosition,
+  ChatOutputMode,
+  PrivacyMode,
+  SyncplayConfig,
+  UnpauseAction,
+} from "../../types/config";
 
 interface DetectedPlayer {
   name: string;
@@ -37,29 +16,50 @@ interface DetectedPlayer {
   version: string | null;
 }
 
-interface SyncplayConfig {
-  server: ServerConfig;
-  user: UserPreferences;
-  player: PlayerConfig;
-  recent_servers: ServerConfig[];
-}
-
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+type SettingsTab = "connection" | "player" | "sync" | "ready" | "privacy" | "chat" | "osd" | "misc";
+
+const privacyOptions: Array<{ label: string; value: PrivacyMode }> = [
+  { label: "Send raw", value: "send_raw" },
+  { label: "Send hashed", value: "send_hashed" },
+  { label: "Do not send", value: "do_not_send" },
+];
+
+const unpauseOptions: Array<{ label: string; value: UnpauseAction }> = [
+  { label: "If already ready", value: "if_already_ready" },
+  { label: "If others ready", value: "if_others_ready" },
+  { label: "If min users ready", value: "if_min_users_ready" },
+  { label: "Always", value: "always" },
+];
+
+const chatInputPositions: Array<{ label: string; value: ChatInputPosition }> = [
+  { label: "Top", value: "top" },
+  { label: "Middle", value: "middle" },
+  { label: "Bottom", value: "bottom" },
+];
+
+const chatOutputModes: Array<{ label: string; value: ChatOutputMode }> = [
+  { label: "Chatroom", value: "chatroom" },
+  { label: "Scrolling", value: "scrolling" },
+];
+
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const [config, setConfig] = useState<SyncplayConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"server" | "user" | "player" | "advanced">("server");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("connection");
   const [detectedPlayers, setDetectedPlayers] = useState<DetectedPlayer[]>([]);
   const [detectingPlayers, setDetectingPlayers] = useState(false);
   const [mediaDirectoryInput, setMediaDirectoryInput] = useState("");
   const [roomListInput, setRoomListInput] = useState("");
+  const [trustedDomainInput, setTrustedDomainInput] = useState("");
   const [serverAddress, setServerAddress] = useState("");
   const [serverAddressError, setServerAddressError] = useState<string | null>(null);
+  const [playerArgsInput, setPlayerArgsInput] = useState("");
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutoSaveRef = useRef(true);
 
@@ -75,6 +75,12 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     loadConfig();
     detectPlayers();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!config) return;
+    const args = config.player.player_arguments || [];
+    setPlayerArgsInput(args.join(" "));
+  }, [config?.player.player_arguments]);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -190,6 +196,17 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     addMediaDirectoryValue(selected);
   };
 
+  const removeMediaDirectory = (dir: string) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      player: {
+        ...config.player,
+        media_directories: config.player.media_directories.filter((entry) => entry !== dir),
+      },
+    });
+  };
+
   const addRoomEntry = () => {
     if (!config) return;
     const trimmed = roomListInput.trim();
@@ -219,13 +236,46 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     });
   };
 
-  const removeMediaDirectory = (dir: string) => {
+  const addTrustedDomain = () => {
     if (!config) return;
+    const trimmed = trustedDomainInput.trim();
+    if (!trimmed) return;
+    if (config.user.trusted_domains.includes(trimmed)) {
+      setTrustedDomainInput("");
+      return;
+    }
+    setConfig({
+      ...config,
+      user: {
+        ...config.user,
+        trusted_domains: [...config.user.trusted_domains, trimmed],
+      },
+    });
+    setTrustedDomainInput("");
+  };
+
+  const removeTrustedDomain = (domain: string) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      user: {
+        ...config.user,
+        trusted_domains: config.user.trusted_domains.filter((entry) => entry !== domain),
+      },
+    });
+  };
+
+  const updatePlayerArguments = (value: string) => {
+    if (!config) return;
+    const args = value
+      .split(" ")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
     setConfig({
       ...config,
       player: {
         ...config.player,
-        media_directories: config.player.media_directories.filter((entry) => entry !== dir),
+        player_arguments: args,
       },
     });
   };
@@ -267,7 +317,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
   return (
     <div className="fixed inset-0 app-overlay flex items-center justify-center z-50">
-      <div className="app-panel rounded-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-auto shadow-xl">
+      <div className="app-panel rounded-xl p-6 w-full max-w-4xl max-h-[85vh] overflow-auto shadow-xl">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div>
             <h2 className="text-xl font-bold">Settings</h2>
@@ -286,52 +336,32 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           </div>
         ) : config ? (
           <>
-            {/* Tabs */}
-            <div className="flex gap-2 mb-4 border-b app-divider">
-              <button
-                onClick={() => setActiveTab("server")}
-                className={`px-4 py-2 ${
-                  activeTab === "server"
-                    ? "border-b-2 border-blue-500 text-blue-500"
-                    : "app-text-muted"
-                }`}
-              >
-                Server
-              </button>
-              <button
-                onClick={() => setActiveTab("user")}
-                className={`px-4 py-2 ${
-                  activeTab === "user"
-                    ? "border-b-2 border-blue-500 text-blue-500"
-                    : "app-text-muted"
-                }`}
-              >
-                User
-              </button>
-              <button
-                onClick={() => setActiveTab("player")}
-                className={`px-4 py-2 ${
-                  activeTab === "player"
-                    ? "border-b-2 border-blue-500 text-blue-500"
-                    : "app-text-muted"
-                }`}
-              >
-                Player
-              </button>
-              <button
-                onClick={() => setActiveTab("advanced")}
-                className={`px-4 py-2 ${
-                  activeTab === "advanced"
-                    ? "border-b-2 border-blue-500 text-blue-500"
-                    : "app-text-muted"
-                }`}
-              >
-                Advanced
-              </button>
+            <div className="flex flex-wrap gap-2 mb-4 border-b app-divider">
+              {[
+                { id: "connection", label: "Connection" },
+                { id: "player", label: "Player" },
+                { id: "sync", label: "Sync" },
+                { id: "ready", label: "Readiness" },
+                { id: "privacy", label: "Privacy" },
+                { id: "chat", label: "Chat" },
+                { id: "osd", label: "OSD" },
+                { id: "misc", label: "Misc" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as SettingsTab)}
+                  className={`px-4 py-2 ${
+                    activeTab === tab.id
+                      ? "border-b-2 border-blue-500 text-blue-500"
+                      : "app-text-muted"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            {/* Server Tab */}
-            {activeTab === "server" && (
+            {activeTab === "connection" && (
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Server Address</label>
@@ -350,21 +380,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium mb-1">Default Room</label>
-                  <input
-                    type="text"
-                    value={config.user.default_room}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, default_room: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
                   <label className="block text-sm font-medium mb-1">Password (optional)</label>
                   <input
                     type="password"
@@ -376,6 +391,36 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                           ...config.server,
                           password: e.target.value || null,
                         },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Username</label>
+                  <input
+                    type="text"
+                    value={config.user.username}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, username: e.target.value },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default Room</label>
+                  <input
+                    type="text"
+                    value={config.user.default_room}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, default_room: e.target.value },
                       })
                     }
                     className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
@@ -428,75 +473,54 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     </div>
                   )}
                 </div>
-              </div>
-            )}
 
-            {/* User Tab */}
-            {activeTab === "user" && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Username</label>
-                  <input
-                    type="text"
-                    value={config.user.username}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, username: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={config.user.show_osd}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, show_osd: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm">Show OSD messages</label>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={config.user.show_playlist}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, show_playlist: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm">Show playlist by default</label>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={config.user.auto_connect}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, auto_connect: e.target.checked },
-                      })
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm">Auto-connect on startup</label>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.autosave_joins_to_list}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, autosave_joins_to_list: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Auto-save joined rooms
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.auto_connect}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, auto_connect: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Auto-connect on startup
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.force_gui_prompt}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, force_gui_prompt: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Always show connect dialog on startup
+                  </label>
                 </div>
               </div>
             )}
 
-            {/* Player Tab */}
             {activeTab === "player" && (
               <div className="space-y-4">
                 <div>
@@ -556,6 +580,38 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 )}
 
                 <div>
+                  <label className="block text-sm font-medium mb-1">Player Arguments</label>
+                  <input
+                    type="text"
+                    value={playerArgsInput}
+                    onChange={(e) => {
+                      setPlayerArgsInput(e.target.value);
+                      updatePlayerArguments(e.target.value);
+                    }}
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    placeholder="--fullscreen --no-border"
+                  />
+                  <p className="text-xs app-text-muted mt-1">
+                    Arguments applied when launching the player
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">MPV Socket Path</label>
+                  <input
+                    type="text"
+                    value={config.player.mpv_socket_path}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        player: { ...config.player, mpv_socket_path: e.target.value },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium mb-1">Media Directories</label>
                   <div className="flex gap-2">
                     <input
@@ -611,11 +667,55 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     Files are matched locally against these directories.
                   </p>
                 </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.shared_playlist_enabled}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, shared_playlist_enabled: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Enable shared playlists
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.loop_at_end_of_playlist}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, loop_at_end_of_playlist: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Loop at end of playlist
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.loop_single_files}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, loop_single_files: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Loop single files
+                  </label>
+                </div>
               </div>
             )}
 
-            {/* Advanced Tab */}
-            {activeTab === "advanced" && (
+            {activeTab === "sync" && (
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">
@@ -681,6 +781,27 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 </div>
 
                 <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Slowdown Reset Threshold (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={config.user.slowdown_reset_threshold}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          slowdown_reset_threshold: parseFloat(e.target.value),
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium mb-1">Slowdown Rate (0-1)</label>
                   <input
                     type="number"
@@ -701,24 +822,869 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    OSD Duration (milliseconds)
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.slow_on_desync}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, slow_on_desync: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Slow down on desync
                   </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.rewind_on_desync}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, rewind_on_desync: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Rewind on desync
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.fastforward_on_desync}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, fastforward_on_desync: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Fast-forward on desync
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.dont_slow_down_with_me}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, dont_slow_down_with_me: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Do not slow down with me
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "ready" && (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.ready_at_start}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, ready_at_start: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Ready at startup
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.pause_on_leave}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, pause_on_leave: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Pause when someone leaves the room
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Unpause behavior</label>
+                  <select
+                    value={config.user.unpause_action}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, unpause_action: e.target.value as UnpauseAction },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    {unpauseOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.autoplay_enabled}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, autoplay_enabled: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Enable auto-play when all ready
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.autoplay_require_same_filenames}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            autoplay_require_same_filenames: e.target.checked,
+                          },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Require same filenames for auto-play
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Auto-play minimum users</label>
+                  <input
+                    type="number"
+                    value={config.user.autoplay_min_users}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          autoplay_min_users: parseInt(e.target.value, 10),
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-xs app-text-muted mt-1">Use -1 to disable minimum.</p>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "privacy" && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Filename privacy</label>
+                  <select
+                    value={config.user.filename_privacy_mode}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          filename_privacy_mode: e.target.value as PrivacyMode,
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    {privacyOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Filesize privacy</label>
+                  <select
+                    value={config.user.filesize_privacy_mode}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          filesize_privacy_mode: e.target.value as PrivacyMode,
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    {privacyOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.only_switch_to_trusted_domains}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          only_switch_to_trusted_domains: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Only switch to trusted domains
+                </label>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Trusted domains</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={trustedDomainInput}
+                      onChange={(e) => setTrustedDomainInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addTrustedDomain();
+                        }
+                      }}
+                      className="flex-1 app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                      placeholder="youtube.com"
+                    />
+                    <button
+                      type="button"
+                      onClick={addTrustedDomain}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {config.user.trusted_domains.length === 0 ? (
+                    <p className="text-xs app-text-muted mt-2">No trusted domains added.</p>
+                  ) : (
+                    <div className="mt-2 space-y-2">
+                      {config.user.trusted_domains.map((domain) => (
+                        <div
+                          key={domain}
+                          className="flex items-center justify-between app-panel-muted px-3 py-2 rounded"
+                        >
+                          <span className="text-sm truncate">{domain}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeTrustedDomain(domain)}
+                            className="text-xs text-red-600 hover:text-red-500"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "chat" && (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.chat_input_enabled}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_input_enabled: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Enable chat input
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.chat_direct_input}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_direct_input: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Direct input mode
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Chat input position</label>
+                  <select
+                    value={config.user.chat_input_position}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          chat_input_position: e.target.value as ChatInputPosition,
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    {chatInputPositions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Input font family</label>
+                    <input
+                      type="text"
+                      value={config.user.chat_input_font_family}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_input_font_family: e.target.value },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Input font size</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_input_relative_font_size}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            chat_input_relative_font_size: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Input font weight</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_input_font_weight}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            chat_input_font_weight: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Input font color</label>
+                    <input
+                      type="text"
+                      value={config.user.chat_input_font_color}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_input_font_color: e.target.value },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.chat_input_font_underline}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, chat_input_font_underline: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Underline chat input
+                </label>
+
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.chat_output_enabled}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_output_enabled: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Enable chat output
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Chat output mode</label>
+                  <select
+                    value={config.user.chat_output_mode}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: {
+                          ...config.user,
+                          chat_output_mode: e.target.value as ChatOutputMode,
+                        },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    {chatOutputModes.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Output font family</label>
+                    <input
+                      type="text"
+                      value={config.user.chat_output_font_family}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_output_font_family: e.target.value },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Output font size</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_output_relative_font_size}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            chat_output_relative_font_size: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Output font weight</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_output_font_weight}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            chat_output_font_weight: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Chat max lines</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_max_lines}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_max_lines: parseInt(e.target.value, 10) },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.chat_output_font_underline}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, chat_output_font_underline: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Underline chat output
+                </label>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Top margin</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_top_margin}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_top_margin: parseInt(e.target.value, 10) },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Left margin</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_left_margin}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_left_margin: parseInt(e.target.value, 10) },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Bottom margin</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_bottom_margin}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            chat_bottom_margin: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.chat_move_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_move_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Move OSD for chat
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">OSD margin</label>
+                  <input
+                    type="number"
+                    value={config.user.chat_osd_margin}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, chat_osd_margin: parseInt(e.target.value, 10) },
+                      })
+                    }
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Notification timeout</label>
+                    <input
+                      type="number"
+                      value={config.user.notification_timeout}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: {
+                            ...config.user,
+                            notification_timeout: parseInt(e.target.value, 10),
+                          },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Alert timeout</label>
+                    <input
+                      type="number"
+                      value={config.user.alert_timeout}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, alert_timeout: parseInt(e.target.value, 10) },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Chat timeout</label>
+                    <input
+                      type="number"
+                      value={config.user.chat_timeout}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, chat_timeout: parseInt(e.target.value, 10) },
+                        })
+                      }
+                      className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "osd" && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">OSD Duration (ms)</label>
                   <input
                     type="number"
                     value={config.user.osd_duration}
                     onChange={(e) =>
                       setConfig({
                         ...config,
-                        user: {
-                          ...config.user,
-                          osd_duration: parseInt(e.target.value),
-                        },
+                        user: { ...config.user, osd_duration: parseInt(e.target.value, 10) },
                       })
                     }
                     className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
                   />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show OSD
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_osd_warnings}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_osd_warnings: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show OSD warnings
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_slowdown_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_slowdown_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show slowdown OSD
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_same_room_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_same_room_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show same room OSD
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_different_room_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_different_room_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show different room OSD
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_non_controller_osd}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_non_controller_osd: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show non-controller OSD
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={config.user.show_duration_notification}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          user: { ...config.user, show_duration_notification: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4"
+                    />
+                    Show duration notification
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "misc" && (
+              <div className="space-y-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.show_playlist}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, show_playlist: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Show playlist by default
+                </label>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.show_contact_info}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, show_contact_info: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Show contact info
+                </label>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.debug}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, debug: e.target.checked },
+                      })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Enable debug logging
+                </label>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Check for updates automatically
+                  </label>
+                  <select
+                    value={
+                      config.user.check_for_updates_automatically === null
+                        ? "auto"
+                        : config.user.check_for_updates_automatically
+                          ? "enabled"
+                          : "disabled"
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      const resolved = value === "auto" ? null : value === "enabled" ? true : false;
+                      setConfig({
+                        ...config,
+                        user: { ...config.user, check_for_updates_automatically: resolved },
+                      });
+                    }}
+                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="auto">Use default</option>
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
                 </div>
               </div>
             )}

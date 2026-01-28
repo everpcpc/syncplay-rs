@@ -1,6 +1,7 @@
 // Connection command handlers
 
 use crate::app_state::{AppState, ConnectionStatusEvent};
+use crate::config::{save_config, ServerConfig};
 use crate::network::connection::Connection;
 use crate::network::messages::{
     ClientFeatures, HelloMessage, PlayState, ProtocolMessage, RoomInfo, SetMessage, StateMessage,
@@ -9,17 +10,30 @@ use crate::network::messages::{
 use crate::network::tls::create_tls_connector;
 use crate::player::controller::{ensure_mpv_connected, load_media_by_name};
 use crate::player::properties::PlayerState;
+use crate::utils::same_filename;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
+use tokio::time::{sleep, Duration};
+
+const AUTOPLAY_DELAY_SECONDS: i32 = 3;
+
+struct ConnectionSnapshot<'a> {
+    host: &'a str,
+    port: u16,
+    username: &'a str,
+    room: &'a str,
+    password: Option<&'a str>,
+}
 
 #[tauri::command]
-pub async fn connect_to_server(
+pub async fn connect_to_server<R: Runtime>(
     host: String,
     port: u16,
     username: String,
     room: String,
     password: Option<String>,
+    app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     tracing::info!(
@@ -43,6 +57,7 @@ pub async fn connect_to_server(
         Ok(mut receiver) => {
             tracing::info!("Successfully connected to server");
 
+            let config = state.config.lock().clone();
             // Send Hello message
             let hello_payload = HelloMessage {
                 username: username.clone(),
@@ -54,7 +69,7 @@ pub async fn connect_to_server(
                 version: "1.2.255".to_string(),
                 realversion: "1.7.3".to_string(),
                 features: Some(ClientFeatures {
-                    shared_playlists: Some(true),
+                    shared_playlists: Some(config.user.shared_playlist_enabled),
                     chat: Some(true),
                     ready_state: Some(true),
                     managed_rooms: Some(false),
@@ -87,10 +102,22 @@ pub async fn connect_to_server(
             *state.connection.lock() = Some(connection.clone());
 
             // Update client state
-            state.client_state.set_username(username);
-            state.client_state.set_room(room);
-            let config = state.config.lock().clone();
+            state.client_state.set_username(username.clone());
+            state.client_state.set_room(room.clone());
             state.sync_engine.lock().update_from_config(&config.user);
+            update_autoplay_state(state.inner(), &config);
+            maybe_autosave_connection(
+                state.inner(),
+                &app,
+                &config,
+                ConnectionSnapshot {
+                    host: &host,
+                    port,
+                    username: &username,
+                    room: &room,
+                    password: password.as_deref(),
+                },
+            );
 
             if let Err(e) = ensure_mpv_connected(state.inner()).await {
                 tracing::warn!("Failed to connect to mpv: {}", e);
@@ -147,20 +174,30 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 state.client_state.clear_users();
                 for (room_name, room_users) in users_by_room {
                     for (username, user_info) in room_users {
+                        let file = user_info.file.as_ref().and_then(|f| f.name.clone());
+                        let file_size = user_info.file.as_ref().and_then(|f| f.size.clone());
+                        let file_duration = user_info.file.as_ref().and_then(|f| f.duration);
                         state.client_state.add_user(crate::client::state::User {
                             username,
                             room: room_name.clone(),
-                            file: user_info.file.and_then(|f| f.name),
+                            file,
+                            file_size,
+                            file_duration,
                             is_ready: user_info.is_ready.unwrap_or(false),
                             is_controller: user_info.controller.unwrap_or(false),
                         });
                     }
                 }
                 emit_user_list(state);
+                evaluate_autoplay(state);
             }
         }
         ProtocolMessage::Chat { Chat } => {
             tracing::info!("Received chat message: {:?}", Chat);
+            let config = state.config.lock().clone();
+            if !config.user.chat_output_enabled {
+                return;
+            }
             // Transform chat message to match frontend format
             let (username, message) = match Chat {
                 crate::network::messages::ChatMessage::Entry { username, message } => {
@@ -276,6 +313,9 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
                 }
             }
             crate::client::sync::SyncAction::SetPaused(paused) => {
+                if !paused {
+                    *state.suppress_unpause_check.lock() = true;
+                }
                 if let Err(e) = mpv.set_paused(paused).await {
                     tracing::warn!("Failed to set paused: {}", e);
                 }
@@ -293,6 +333,8 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
             crate::client::sync::SyncAction::None => {}
         }
     }
+
+    evaluate_autoplay(state);
 }
 
 async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
@@ -303,6 +345,8 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
     if let Some(file) = set_msg.file {
         if let Some(name) = file.name {
             state.client_state.set_file(Some(name.clone()));
+            state.client_state.set_file_size(file.size.clone());
+            state.client_state.set_file_duration(file.duration);
             if let Err(e) = load_media_by_name(state, &name, false).await {
                 tracing::warn!("Failed to load file from set: {}", e);
             }
@@ -310,8 +354,21 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
     }
 
     let mut users_changed = false;
+    let mut left_in_room = false;
     if let Some(user_updates) = set_msg.user {
         for (username, update) in user_updates {
+            if update
+                .event
+                .as_ref()
+                .and_then(|event| event.left)
+                .unwrap_or(false)
+            {
+                if let Some(user) = state.client_state.get_user(&username) {
+                    if user.room == state.client_state.get_room() {
+                        left_in_room = true;
+                    }
+                }
+            }
             if apply_user_update(state, username, update) {
                 users_changed = true;
             }
@@ -338,6 +395,8 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
                     username: username.clone(),
                     room: state.client_state.get_room(),
                     file: None,
+                    file_size: None,
+                    file_duration: None,
                     is_ready,
                     is_controller: false,
                 });
@@ -353,6 +412,13 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
 
     if users_changed {
         emit_user_list(state);
+    }
+
+    if left_in_room {
+        let config = state.config.lock().clone();
+        if config.user.pause_on_leave {
+            pause_local_player(state).await;
+        }
     }
 
     let mut playlist_changed = false;
@@ -377,6 +443,8 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
             }
         }
     }
+
+    evaluate_autoplay(state);
 }
 
 async fn handle_tls_message(state: &Arc<AppState>, tls: TLSMessage) {
@@ -423,6 +491,215 @@ fn send_hello(state: &Arc<AppState>) {
 
     *hello_sent = true;
     tracing::info!("Sent Hello message");
+
+    let config = state.config.lock().clone();
+    if config.user.ready_at_start {
+        if let Err(e) = send_ready_state(state, true, false) {
+            tracing::warn!("Failed to send ready-at-start: {}", e);
+        }
+    }
+}
+
+fn update_autoplay_state(state: &Arc<AppState>, config: &crate::config::SyncplayConfig) {
+    let mut autoplay = state.autoplay.lock();
+    autoplay.enabled = config.user.autoplay_enabled;
+    autoplay.min_users = config.user.autoplay_min_users;
+    autoplay.require_same_filenames = config.user.autoplay_require_same_filenames;
+    autoplay.unpause_action = config.user.unpause_action.clone();
+    if !autoplay.enabled {
+        autoplay.countdown_active = false;
+        autoplay.countdown_remaining = 0;
+    }
+}
+
+fn maybe_autosave_connection<R: Runtime>(
+    state: &Arc<AppState>,
+    app: &AppHandle<R>,
+    config: &crate::config::SyncplayConfig,
+    snapshot: ConnectionSnapshot<'_>,
+) {
+    if !config.user.autosave_joins_to_list {
+        return;
+    }
+
+    let mut updated = config.clone();
+    updated.server.host = snapshot.host.to_string();
+    updated.server.port = snapshot.port;
+    updated.server.password = snapshot.password.map(|value| value.to_string());
+    updated.user.username = snapshot.username.to_string();
+    updated.user.default_room = snapshot.room.to_string();
+
+    updated.add_recent_server(ServerConfig {
+        host: snapshot.host.to_string(),
+        port: snapshot.port,
+        password: snapshot.password.map(|value| value.to_string()),
+    });
+
+    if !updated
+        .user
+        .room_list
+        .iter()
+        .any(|entry| entry == snapshot.room)
+    {
+        updated.user.room_list.insert(0, snapshot.room.to_string());
+    }
+
+    if let Err(e) = save_config(app, &updated) {
+        tracing::warn!("Failed to save config after connect: {}", e);
+        return;
+    }
+
+    *state.config.lock() = updated.clone();
+    state.emit_event("config-updated", updated);
+}
+
+fn send_ready_state(
+    state: &Arc<AppState>,
+    is_ready: bool,
+    manually_initiated: bool,
+) -> Result<(), String> {
+    state.client_state.set_ready(is_ready);
+    let username = state.client_state.get_username();
+    let message = ProtocolMessage::Set {
+        Set: SetMessage {
+            room: None,
+            file: None,
+            user: None,
+            ready: Some(crate::network::messages::ReadyState {
+                username: Some(username),
+                is_ready: Some(is_ready),
+                manually_initiated: Some(manually_initiated),
+                set_by: None,
+            }),
+            playlist_index: None,
+            playlist_change: None,
+            features: None,
+        },
+    };
+    let connection = state.connection.lock().clone();
+    let Some(connection) = connection else {
+        return Err("Not connected to server".to_string());
+    };
+    connection
+        .send(message)
+        .map_err(|e| format!("Failed to send ready state: {}", e))
+}
+
+fn autoplay_conditions_met(state: &Arc<AppState>) -> bool {
+    let config = state.config.lock().clone();
+    if !config.user.autoplay_enabled {
+        return false;
+    }
+
+    let room = state.client_state.get_room();
+    let users = state.client_state.get_users_in_room(&room);
+    if users.is_empty() {
+        return false;
+    }
+
+    let current_file = state.client_state.get_file();
+    for user in &users {
+        if !user.is_ready {
+            return false;
+        }
+        if config.user.autoplay_require_same_filenames
+            && !same_filename(current_file.as_deref(), user.file.as_deref())
+        {
+            return false;
+        }
+    }
+
+    if config.user.autoplay_min_users >= 2 && (users.len() as i32) < config.user.autoplay_min_users
+    {
+        return false;
+    }
+
+    let mpv_state = state.mpv.lock().clone().map(|mpv| mpv.get_state());
+    if let Some(mpv_state) = mpv_state {
+        if mpv_state.paused == Some(false) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn start_autoplay_countdown(state: Arc<AppState>) {
+    {
+        let mut autoplay = state.autoplay.lock();
+        if autoplay.countdown_active {
+            return;
+        }
+        autoplay.countdown_active = true;
+        autoplay.countdown_remaining = AUTOPLAY_DELAY_SECONDS;
+    }
+
+    tokio::spawn(async move {
+        loop {
+            let mut should_stop = false;
+            let mut should_unpause = false;
+            {
+                let mut autoplay = state.autoplay.lock();
+                if !autoplay.countdown_active {
+                    return;
+                }
+                if !autoplay_conditions_met(&state) {
+                    autoplay.countdown_active = false;
+                    autoplay.countdown_remaining = 0;
+                    return;
+                }
+                if autoplay.countdown_remaining <= 0 {
+                    autoplay.countdown_active = false;
+                    should_unpause = true;
+                } else {
+                    autoplay.countdown_remaining -= 1;
+                }
+            }
+
+            if should_unpause {
+                if let Err(e) = ensure_mpv_connected(&state).await {
+                    tracing::warn!("Failed to connect to mpv for autoplay: {}", e);
+                    return;
+                }
+                let mpv = state.mpv.lock().clone();
+                if let Some(mpv) = mpv {
+                    if let Err(e) = mpv.set_paused(false).await {
+                        tracing::warn!("Failed to autoplay unpause: {}", e);
+                    }
+                }
+                should_stop = true;
+            }
+
+            if should_stop {
+                return;
+            }
+
+            sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+fn evaluate_autoplay(state: &Arc<AppState>) {
+    if autoplay_conditions_met(state) {
+        start_autoplay_countdown(state.clone());
+    } else {
+        let mut autoplay = state.autoplay.lock();
+        autoplay.countdown_active = false;
+        autoplay.countdown_remaining = 0;
+    }
+}
+
+async fn pause_local_player(state: &Arc<AppState>) {
+    if let Err(e) = ensure_mpv_connected(state).await {
+        tracing::warn!("Failed to connect to mpv for pause: {}", e);
+        return;
+    }
+    let mpv = state.mpv.lock().clone();
+    if let Some(mpv) = mpv {
+        if let Err(e) = mpv.set_paused(true).await {
+            tracing::warn!("Failed to pause player: {}", e);
+        }
+    }
 }
 
 fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate) -> bool {
@@ -440,6 +717,8 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
             username: username.clone(),
             room: state.client_state.get_room(),
             file: None,
+            file_size: None,
+            file_duration: None,
             is_ready: false,
             is_controller: false,
         });
@@ -449,6 +728,8 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
     }
     if let Some(file) = update.file {
         user.file = file.name;
+        user.file_size = file.size;
+        user.file_duration = file.duration;
     }
     if let Some(is_ready) = update.is_ready {
         user.is_ready = is_ready;
@@ -510,6 +791,11 @@ pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(
     state.playlist.clear();
     state.client_state.set_file(None);
     state.client_state.set_ready(false);
+    {
+        let mut autoplay = state.autoplay.lock();
+        autoplay.countdown_active = false;
+        autoplay.countdown_remaining = 0;
+    }
     state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
     state.emit_event(
         "playlist-updated",

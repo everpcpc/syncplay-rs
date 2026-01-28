@@ -2,6 +2,39 @@
 // Configuration structures and defaults
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyMode {
+    SendRaw,
+    SendHashed,
+    DoNotSend,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnpauseAction {
+    IfAlreadyReady,
+    IfOthersReady,
+    IfMinUsersReady,
+    Always,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatInputPosition {
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatOutputMode {
+    Chatroom,
+    Scrolling,
+}
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,14 +68,73 @@ pub struct UserPreferences {
     pub slowdown_threshold: f64,
     pub slowdown_reset_threshold: f64,
     pub slowdown_rate: f64,
+    pub slow_on_desync: bool,
+    pub rewind_on_desync: bool,
+    pub fastforward_on_desync: bool,
+    pub dont_slow_down_with_me: bool,
+
+    // Ready & autoplay
+    pub ready_at_start: bool,
+    pub pause_on_leave: bool,
+    pub unpause_action: UnpauseAction,
+    pub autoplay_enabled: bool,
+    pub autoplay_min_users: i32,
+    pub autoplay_require_same_filenames: bool,
+
+    // Privacy
+    pub filename_privacy_mode: PrivacyMode,
+    pub filesize_privacy_mode: PrivacyMode,
+
+    // Trusted domains
+    pub only_switch_to_trusted_domains: bool,
+    pub trusted_domains: Vec<String>,
 
     // OSD settings
     pub show_osd: bool,
     pub osd_duration: u64,
+    pub show_osd_warnings: bool,
+    pub show_slowdown_osd: bool,
+    pub show_different_room_osd: bool,
+    pub show_same_room_osd: bool,
+    pub show_non_controller_osd: bool,
+    pub show_duration_notification: bool,
+
+    // Chat settings
+    pub chat_input_enabled: bool,
+    pub chat_direct_input: bool,
+    pub chat_input_font_family: String,
+    pub chat_input_relative_font_size: u32,
+    pub chat_input_font_weight: u32,
+    pub chat_input_font_underline: bool,
+    pub chat_input_font_color: String,
+    pub chat_input_position: ChatInputPosition,
+    pub chat_output_enabled: bool,
+    pub chat_output_font_family: String,
+    pub chat_output_relative_font_size: u32,
+    pub chat_output_font_weight: u32,
+    pub chat_output_font_underline: bool,
+    pub chat_output_mode: ChatOutputMode,
+    pub chat_max_lines: u32,
+    pub chat_top_margin: u32,
+    pub chat_left_margin: u32,
+    pub chat_bottom_margin: u32,
+    pub chat_move_osd: bool,
+    pub chat_osd_margin: u32,
+    pub notification_timeout: u32,
+    pub alert_timeout: u32,
+    pub chat_timeout: u32,
 
     // UI settings
+    pub autosave_joins_to_list: bool,
+    pub shared_playlist_enabled: bool,
+    pub loop_at_end_of_playlist: bool,
+    pub loop_single_files: bool,
     pub show_playlist: bool,
     pub auto_connect: bool,
+    pub force_gui_prompt: bool,
+    pub check_for_updates_automatically: Option<bool>,
+    pub show_contact_info: bool,
+    pub debug: bool,
 }
 
 /// Player configuration
@@ -53,6 +145,10 @@ pub struct PlayerConfig {
     #[serde(default)]
     pub mpv_socket_path: String,
     pub media_directories: Vec<String>,
+    #[serde(default)]
+    pub player_arguments: Vec<String>,
+    #[serde(default)]
+    pub per_player_arguments: HashMap<String, Vec<String>>,
 }
 
 impl Default for PlayerConfig {
@@ -66,6 +162,8 @@ impl Default for PlayerConfig {
             player_path: "mpv".to_string(),
             mpv_socket_path: default_socket,
             media_directories: Vec::new(),
+            player_arguments: Vec::new(),
+            per_player_arguments: HashMap::new(),
         }
     }
 }
@@ -82,18 +180,83 @@ impl Default for UserPreferences {
             seek_threshold_rewind: 4.0,
             seek_threshold_fastforward: 5.0,
             slowdown_threshold: 1.5,
-            slowdown_reset_threshold: 0.5,
+            slowdown_reset_threshold: 0.1,
             slowdown_rate: 0.95,
+            slow_on_desync: true,
+            rewind_on_desync: true,
+            fastforward_on_desync: true,
+            dont_slow_down_with_me: false,
+
+            // Ready & autoplay defaults
+            ready_at_start: false,
+            pause_on_leave: false,
+            unpause_action: UnpauseAction::IfOthersReady,
+            autoplay_enabled: false,
+            autoplay_min_users: -1,
+            autoplay_require_same_filenames: true,
+
+            // Privacy defaults
+            filename_privacy_mode: PrivacyMode::SendRaw,
+            filesize_privacy_mode: PrivacyMode::SendRaw,
+
+            // Trusted domains defaults
+            only_switch_to_trusted_domains: true,
+            trusted_domains: vec!["youtube.com".to_string(), "youtu.be".to_string()],
 
             // OSD defaults
             show_osd: true,
             osd_duration: 3000,
+            show_osd_warnings: true,
+            show_slowdown_osd: true,
+            show_different_room_osd: false,
+            show_same_room_osd: true,
+            show_non_controller_osd: false,
+            show_duration_notification: true,
+
+            // Chat defaults
+            chat_input_enabled: true,
+            chat_direct_input: false,
+            chat_input_font_family: "sans-serif".to_string(),
+            chat_input_relative_font_size: 24,
+            chat_input_font_weight: 1,
+            chat_input_font_underline: false,
+            chat_input_font_color: "#FFFF00".to_string(),
+            chat_input_position: ChatInputPosition::Top,
+            chat_output_enabled: true,
+            chat_output_font_family: "sans-serif".to_string(),
+            chat_output_relative_font_size: 24,
+            chat_output_font_weight: 1,
+            chat_output_font_underline: false,
+            chat_output_mode: ChatOutputMode::Chatroom,
+            chat_max_lines: 7,
+            chat_top_margin: 25,
+            chat_left_margin: 20,
+            chat_bottom_margin: 30,
+            chat_move_osd: true,
+            chat_osd_margin: 110,
+            notification_timeout: 3,
+            alert_timeout: 5,
+            chat_timeout: 7,
 
             // UI defaults
+            autosave_joins_to_list: true,
+            shared_playlist_enabled: true,
+            loop_at_end_of_playlist: false,
+            loop_single_files: false,
             show_playlist: true,
             auto_connect: false,
+            force_gui_prompt: true,
+            check_for_updates_automatically: None,
+            show_contact_info: true,
+            debug: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicServer {
+    pub name: String,
+    pub address: String,
 }
 
 /// Complete Syncplay configuration
@@ -103,6 +266,7 @@ pub struct SyncplayConfig {
     pub user: UserPreferences,
     pub player: PlayerConfig,
     pub recent_servers: Vec<ServerConfig>,
+    pub public_servers: Vec<PublicServer>,
 }
 
 impl Default for SyncplayConfig {
@@ -117,6 +281,28 @@ impl Default for SyncplayConfig {
                     host: "syncplay.pl".to_string(),
                     port: 8995,
                     password: None,
+                },
+            ],
+            public_servers: vec![
+                PublicServer {
+                    name: "syncplay.pl:8995 (France)".to_string(),
+                    address: "syncplay.pl:8995".to_string(),
+                },
+                PublicServer {
+                    name: "syncplay.pl:8996 (France)".to_string(),
+                    address: "syncplay.pl:8996".to_string(),
+                },
+                PublicServer {
+                    name: "syncplay.pl:8997 (France)".to_string(),
+                    address: "syncplay.pl:8997".to_string(),
+                },
+                PublicServer {
+                    name: "syncplay.pl:8998 (France)".to_string(),
+                    address: "syncplay.pl:8998".to_string(),
+                },
+                PublicServer {
+                    name: "syncplay.pl:8999 (France)".to_string(),
+                    address: "syncplay.pl:8999".to_string(),
                 },
             ],
         }
@@ -154,6 +340,18 @@ impl SyncplayConfig {
 
         if self.user.slowdown_rate <= 0.0 || self.user.slowdown_rate >= 1.0 {
             return Err("Slowdown rate must be between 0 and 1".to_string());
+        }
+
+        if self.user.osd_duration == 0 {
+            return Err("OSD duration must be positive".to_string());
+        }
+
+        if self.user.chat_max_lines == 0 {
+            return Err("Chat max lines must be positive".to_string());
+        }
+
+        if self.user.autoplay_min_users < -1 {
+            return Err("Autoplay min users must be >= -1".to_string());
         }
 
         Ok(())
@@ -197,6 +395,16 @@ mod tests {
         let mut config = SyncplayConfig::default();
         config.user.username = String::new();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_default_public_servers() {
+        let config = SyncplayConfig::default();
+        assert!(!config.public_servers.is_empty());
+        assert!(config
+            .public_servers
+            .iter()
+            .any(|entry| entry.address == "syncplay.pl:8999"));
     }
 
     #[test]

@@ -13,6 +13,10 @@ pub async fn update_playlist(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     tracing::info!("Playlist action: {} for file: {:?}", action, filename);
+    let config = state.config.lock().clone();
+    if !config.user.shared_playlist_enabled {
+        return Err("Shared playlists are disabled".to_string());
+    }
     let previous_index = state.playlist.get_current_index();
 
     match action.as_str() {

@@ -1,12 +1,17 @@
 // Room command handlers
 
 use crate::app_state::AppState;
+use crate::config::save_config;
 use crate::network::messages::{ProtocolMessage, ReadyState, RoomInfo, SetMessage};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 #[tauri::command]
-pub async fn change_room(room: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn change_room<R: Runtime>(
+    room: String,
+    app: AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     tracing::info!("Changing to room: {}", room);
 
     // Check if connected
@@ -20,7 +25,7 @@ pub async fn change_room(room: String, state: State<'_, Arc<AppState>>) -> Resul
     let message = ProtocolMessage::Set {
         Set: SetMessage {
             room: Some(RoomInfo {
-                name: room,
+                name: room.clone(),
                 password: None,
             }),
             file: None,
@@ -32,6 +37,20 @@ pub async fn change_room(room: String, state: State<'_, Arc<AppState>>) -> Resul
         },
     };
     send_to_server(&state, message)?;
+
+    let config = state.config.lock().clone();
+    if config.user.autosave_joins_to_list {
+        let mut updated = config.clone();
+        if !updated.user.room_list.contains(&room) {
+            updated.user.room_list.push(room.clone());
+        }
+        updated.user.default_room = room.clone();
+        if let Err(e) = save_config(&app, &updated) {
+            tracing::warn!("Failed to save config after room change: {}", e);
+        }
+        *state.config.lock() = updated.clone();
+        state.emit_event("config-updated", updated);
+    }
 
     Ok(())
 }
