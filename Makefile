@@ -1,7 +1,7 @@
-.PHONY: bump-major bump-minor bump-patch format run test lint
+.PHONY: bump-major bump-minor bump-patch format run test lint install build
 
-# Get current version from package.json
-CURRENT_VERSION := $(shell jq -r '.version' package.json)
+# Get current version from tauri.conf.json
+CURRENT_VERSION := $(shell jq -r '.version' src-tauri/tauri.conf.json)
 
 # Parse version components
 MAJOR := $(shell echo $(CURRENT_VERSION) | cut -d. -f1)
@@ -11,6 +11,14 @@ PATCH := $(shell echo $(CURRENT_VERSION) | cut -d. -f3)
 run:
 	@echo "Starting Syncplay Tauri in development mode..."
 	@pnpm tauri dev
+
+install:
+	@echo "Installing frontend dependencies..."
+	@pnpm install
+
+build:
+	@echo "Building Syncplay Tauri for production..."
+	@pnpm tauri build
 
 format:
 	@echo "Formatting Rust code..."
@@ -48,9 +56,8 @@ bump-patch:
 
 update-version:
 	@echo "Updating version to $(NEW_VERSION)"
-	@jq '.version = "$(NEW_VERSION)"' package.json > package.json.tmp && mv package.json.tmp package.json
-	@sed -i '' 's/^version = ".*"/version = "$(NEW_VERSION)"/' src-tauri/Cargo.toml
-	@git add package.json src-tauri/Cargo.toml
+	@jq '.version = "$(NEW_VERSION)"' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+	@git add src-tauri/tauri.conf.json
 	@git commit -m "chore: bump version to $(NEW_VERSION)"
 	@echo "Version bumped to $(NEW_VERSION) and committed"
 	@echo "Run 'git push origin main' to trigger the release workflow"
