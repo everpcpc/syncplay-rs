@@ -94,6 +94,26 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
     Ok(())
 }
 
+pub async fn restart_player(state: &Arc<AppState>) -> Result<(), String> {
+    stop_player(state).await?;
+    ensure_player_connected(state).await
+}
+
+pub async fn stop_player(state: &Arc<AppState>) -> Result<(), String> {
+    *state.player.lock() = None;
+    let child = {
+        let mut guard = state.player_process.lock();
+        guard.take()
+    };
+    if let Some(mut child) = child {
+        if let Err(e) = child.kill().await {
+            tracing::warn!("Failed to stop player process: {}", e);
+        }
+        let _ = child.wait().await;
+    }
+    Ok(())
+}
+
 pub fn spawn_player_state_loop(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut last_sent: Option<PlayerStateSnapshot> = None;
@@ -152,10 +172,22 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
 
             if should_send_state(&player_state, last_sent.as_ref()) {
                 if let Some(play_state) = to_play_state(&state, &player_state) {
+                    let ping = {
+                        let latency_calculation = *state.last_latency_calculation.lock();
+                        let client_latency_calculation =
+                            crate::network::ping::PingService::new_timestamp();
+                        let client_rtt = state.ping_service.lock().get_rtt();
+                        crate::network::messages::PingInfo {
+                            latency_calculation,
+                            client_latency_calculation: Some(client_latency_calculation),
+                            client_rtt: Some(client_rtt),
+                            server_rtt: None,
+                        }
+                    };
                     let state_msg = ProtocolMessage::State {
                         State: StateMessage {
                             playstate: Some(play_state),
-                            ping: None,
+                            ping: Some(ping),
                             ignoring_on_the_fly: None,
                         },
                     };

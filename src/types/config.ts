@@ -86,6 +86,7 @@ export interface UserPreferences {
   loop_at_end_of_playlist: boolean;
   loop_single_files: boolean;
   show_playlist: boolean;
+  side_panel_layout: "rows" | "columns";
   auto_connect: boolean;
   force_gui_prompt: boolean;
   check_for_updates_automatically: boolean | null;

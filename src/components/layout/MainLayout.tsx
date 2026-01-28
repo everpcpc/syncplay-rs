@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserList } from "../users/UserList";
 import { ChatPanel } from "../chat/ChatPanel";
 import { PlayerStatus } from "../player/PlayerStatus";
-import { FiLink2, FiList, FiMoon, FiSettings, FiSun } from "react-icons/fi";
+import { FiLayout, FiLink2, FiList, FiMoon, FiSettings, FiSun } from "react-icons/fi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWindowDrag } from "../../hooks/useWindowDrag";
 import { PlaylistPanel } from "../playlist/PlaylistPanel";
@@ -25,6 +25,7 @@ export function MainLayout() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
+  const [sideLayout, setSideLayout] = useState<"columns" | "rows">("rows");
   const [theme, setTheme] = useState<ThemePreference>("dark");
   const connection = useSyncplayStore((state) => state.connection);
   const config = useSyncplayStore((state) => state.config);
@@ -86,6 +87,9 @@ export function MainLayout() {
       showPlaylistRef.current = config.user.show_playlist;
       setShowPlaylist(config.user.show_playlist);
     }
+    if (config.user.side_panel_layout) {
+      setSideLayout(config.user.side_panel_layout);
+    }
     const normalizedTheme = normalizeTheme(config.user.theme);
     setTheme(normalizedTheme);
     applyTheme(normalizedTheme);
@@ -114,6 +118,30 @@ export function MainLayout() {
         message: "Failed to save theme",
       });
     }
+  };
+
+  const handleTogglePlaylist = () => {
+    setShowPlaylist((prev) => {
+      const next = !prev;
+      void (async () => {
+        try {
+          const config = await invoke<SyncplayConfig>("get_config");
+          await invoke("update_config", {
+            config: {
+              ...config,
+              user: { ...config.user, show_playlist: next },
+            },
+          });
+        } catch (error) {
+          setShowPlaylist(prev);
+          addNotification({
+            type: "error",
+            message: "Failed to save playlist visibility",
+          });
+        }
+      })();
+      return next;
+    });
   };
 
   const handleHeaderMouseDown = (event: React.MouseEvent) => {
@@ -146,47 +174,84 @@ export function MainLayout() {
           >
             <div className="app-header-row">
               <PlayerStatus />
-              <div className="app-header-actions" data-tauri-drag-region="false">
-                <button
-                  onClick={() => setShowPlaylist(!showPlaylist)}
-                  className="btn-neutral app-icon-button"
-                  data-tauri-drag-region="false"
-                  title={showPlaylist ? "Hide playlist" : "Show playlist"}
-                  aria-label={showPlaylist ? "Hide playlist" : "Show playlist"}
-                >
-                  <FiList className="app-icon" />
-                </button>
-                <button
-                  onClick={handleToggleTheme}
-                  className="btn-neutral app-icon-button"
-                  data-tauri-drag-region="false"
-                  title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-                  aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-                >
-                  {theme === "light" ? (
-                    <FiMoon className="app-icon" />
-                  ) : (
-                    <FiSun className="app-icon" />
-                  )}
-                </button>
-                <button
-                  onClick={() => setShowSettingsDialog(true)}
-                  className="btn-neutral app-icon-button"
-                  data-tauri-drag-region="false"
-                  title="Settings"
-                  aria-label="Settings"
-                >
-                  <FiSettings className="app-icon" />
-                </button>
-                <button
-                  onClick={() => setShowConnectionDialog(true)}
-                  className="btn-primary app-icon-button"
-                  data-tauri-drag-region="false"
-                  title="Connect"
-                  aria-label="Connect"
-                >
-                  <FiLink2 className="app-icon" />
-                </button>
+              <div className="app-header-actions w-full" data-tauri-drag-region="false">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTogglePlaylist}
+                    className="btn-neutral app-icon-button"
+                    data-tauri-drag-region="false"
+                    title={showPlaylist ? "Hide playlist" : "Show playlist"}
+                    aria-label={showPlaylist ? "Hide playlist" : "Show playlist"}
+                  >
+                    <FiList className="app-icon" />
+                  </button>
+                  <button
+                    onClick={() =>
+                      setSideLayout((prev) => {
+                        const next = prev === "columns" ? "rows" : "columns";
+                        void (async () => {
+                          try {
+                            const config = await invoke<SyncplayConfig>("get_config");
+                            await invoke("update_config", {
+                              config: {
+                                ...config,
+                                user: { ...config.user, side_panel_layout: next },
+                              },
+                            });
+                          } catch (error) {
+                            setSideLayout(prev);
+                            addNotification({
+                              type: "error",
+                              message: "Failed to save layout",
+                            });
+                          }
+                        })();
+                        return next;
+                      })
+                    }
+                    className="btn-neutral app-icon-button"
+                    data-tauri-drag-region="false"
+                    title={sideLayout === "columns" ? "Stack panels" : "Split panels"}
+                    aria-label={sideLayout === "columns" ? "Stack panels" : "Split panels"}
+                  >
+                    <FiLayout className="app-icon" />
+                  </button>
+                  <button
+                    onClick={handleToggleTheme}
+                    className="btn-neutral app-icon-button"
+                    data-tauri-drag-region="false"
+                    title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                    aria-label={
+                      theme === "light" ? "Switch to dark theme" : "Switch to light theme"
+                    }
+                  >
+                    {theme === "light" ? (
+                      <FiMoon className="app-icon" />
+                    ) : (
+                      <FiSun className="app-icon" />
+                    )}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    onClick={() => setShowConnectionDialog(true)}
+                    className="btn-primary app-icon-button"
+                    data-tauri-drag-region="false"
+                    title="Connect"
+                    aria-label="Connect"
+                  >
+                    <FiLink2 className="app-icon" />
+                  </button>
+                  <button
+                    onClick={() => setShowSettingsDialog(true)}
+                    className="btn-neutral app-icon-button"
+                    data-tauri-drag-region="false"
+                    title="Settings"
+                    aria-label="Settings"
+                  >
+                    <FiSettings className="app-icon" />
+                  </button>
+                </div>
               </div>
             </div>
           </header>
@@ -194,9 +259,18 @@ export function MainLayout() {
           <div
             className="app-side-panels"
             style={{
-              gridTemplateColumns: showPlaylist
-                ? "minmax(0, 1fr) minmax(0, 1fr)"
-                : "minmax(0, 1fr)",
+              gridTemplateColumns:
+                sideLayout === "columns"
+                  ? showPlaylist
+                    ? "minmax(0, 1fr) minmax(0, 1fr)"
+                    : "minmax(0, 1fr)"
+                  : "minmax(0, 1fr)",
+              gridTemplateRows:
+                sideLayout === "rows"
+                  ? showPlaylist
+                    ? "minmax(0, 1fr) minmax(0, 1fr)"
+                    : "minmax(0, 1fr)"
+                  : "minmax(0, 1fr)",
             }}
           >
             <aside className="app-side-panel app-sidebar p-5 overflow-auto">

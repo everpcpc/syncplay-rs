@@ -1,0 +1,208 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { SyncplayConfig } from "../../types/config";
+import { useNotificationStore } from "../../store/notifications";
+
+interface MediaDirectoriesDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export function MediaDirectoriesDialog({ isOpen, onClose }: MediaDirectoriesDialogProps) {
+  const [config, setConfig] = useState<SyncplayConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [mediaDirectoryInput, setMediaDirectoryInput] = useState("");
+  const addNotification = useNotificationStore((state) => state.addNotification);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setConfig(null);
+      setMediaDirectoryInput("");
+      return;
+    }
+    const loadConfig = async () => {
+      setLoading(true);
+      try {
+        const loaded = await invoke<SyncplayConfig>("get_config");
+        setConfig(loaded);
+      } catch (error) {
+        addNotification({
+          type: "error",
+          message: "Failed to load media directory settings",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadConfig();
+  }, [isOpen, addNotification]);
+
+  const saveConfig = async (nextConfig: SyncplayConfig) => {
+    try {
+      await invoke("update_config", { config: nextConfig });
+      setConfig(nextConfig);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        message: "Failed to update media directories",
+      });
+    }
+  };
+
+  const addMediaDirectory = async () => {
+    if (!config) return;
+    const trimmed = mediaDirectoryInput.trim();
+    if (!trimmed) return;
+    if (config.player.media_directories.includes(trimmed)) {
+      addNotification({
+        type: "warning",
+        message: "Media directory already exists",
+      });
+      return;
+    }
+    const nextConfig: SyncplayConfig = {
+      ...config,
+      player: {
+        ...config.player,
+        media_directories: [...config.player.media_directories, trimmed],
+      },
+    };
+    await saveConfig(nextConfig);
+    setMediaDirectoryInput("");
+  };
+
+  const addMediaDirectoryFromPicker = async () => {
+    if (!config) return;
+    let selected: string | string[] | null = null;
+    try {
+      selected = await open({
+        multiple: false,
+        directory: true,
+      });
+    } catch (error) {
+      addNotification({
+        type: "error",
+        message: "Failed to open directory picker",
+      });
+      return;
+    }
+    if (!selected || Array.isArray(selected)) {
+      return;
+    }
+    if (config.player.media_directories.includes(selected)) {
+      addNotification({
+        type: "warning",
+        message: "Media directory already exists",
+      });
+      return;
+    }
+    const nextConfig: SyncplayConfig = {
+      ...config,
+      player: {
+        ...config.player,
+        media_directories: [...config.player.media_directories, selected],
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  const removeMediaDirectory = async (dir: string) => {
+    if (!config) return;
+    const nextConfig: SyncplayConfig = {
+      ...config,
+      player: {
+        ...config.player,
+        media_directories: config.player.media_directories.filter((entry) => entry !== dir),
+      },
+    };
+    await saveConfig(nextConfig);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 app-overlay flex items-center justify-center z-50">
+      <div className="app-panel app-panel-glass rounded-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-auto shadow-xl">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-xl font-bold">Media Directories</h2>
+            <p className="text-xs app-text-muted">Manage directories used for playlist matching.</p>
+          </div>
+          <button onClick={onClose} className="btn-neutral px-3 py-2 rounded-md text-sm">
+            Close
+          </button>
+        </div>
+
+        {loading && !config ? (
+          <div className="text-center py-8">
+            <p className="app-text-muted">Loading directories...</p>
+          </div>
+        ) : config ? (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Add directory</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={mediaDirectoryInput}
+                  onChange={(e) => setMediaDirectoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addMediaDirectory();
+                    }
+                  }}
+                  className="flex-1 app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+                  placeholder="/path/to/media"
+                />
+                <button
+                  type="button"
+                  onClick={addMediaDirectory}
+                  className="btn-primary px-3 py-2 rounded text-sm"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={addMediaDirectoryFromPicker}
+                  className="btn-neutral px-3 py-2 rounded text-sm"
+                >
+                  Browse
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium mb-2 block">Current directories</label>
+              {config.player.media_directories.length === 0 ? (
+                <p className="text-xs app-text-muted">No media directories added.</p>
+              ) : (
+                <div className="space-y-2">
+                  {config.player.media_directories.map((dir) => (
+                    <div
+                      key={dir}
+                      className="flex items-center justify-between app-panel-muted px-3 py-2 rounded"
+                    >
+                      <span className="text-sm truncate">{dir}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeMediaDirectory(dir)}
+                        className="text-xs app-text-danger hover:opacity-80"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs app-text-muted mt-2">
+                Files are matched locally against these directories.
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}

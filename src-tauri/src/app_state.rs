@@ -7,6 +7,7 @@ use crate::client::{chat::ChatManager, playlist::Playlist, state::ClientState, s
 use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::connection::Connection;
 use crate::network::messages::HelloMessage;
+use crate::network::ping::PingService;
 use crate::player::backend::PlayerBackend;
 
 /// Global application state
@@ -39,6 +40,10 @@ pub struct AppState {
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     /// Autoplay countdown state
     pub autoplay: Arc<Mutex<AutoPlayState>>,
+    /// Ping RTT tracking
+    pub ping_service: Arc<Mutex<PingService>>,
+    /// Last latency calculation timestamp from server
+    pub last_latency_calculation: Arc<Mutex<Option<f64>>>,
 }
 
 impl AppState {
@@ -58,6 +63,8 @@ impl AppState {
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
             autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
+            ping_service: Arc::new(Mutex::new(PingService::default())),
+            last_latency_calculation: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -107,6 +114,8 @@ impl Default for AppState {
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
             autoplay: Arc::new(Mutex::new(AutoPlayState::default())),
+            ping_service: Arc::new(Mutex::new(PingService::default())),
+            last_latency_calculation: Arc::new(Mutex::new(None)),
         }
     }
 }
