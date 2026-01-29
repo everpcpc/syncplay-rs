@@ -25,7 +25,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type SettingsTab = "connection" | "player" | "sync" | "ready" | "privacy" | "chat" | "osd" | "misc";
+type SettingsTab = "player" | "sync" | "ready" | "privacy" | "chat" | "osd" | "misc";
 
 const privacyOptions: Array<{ label: string; value: PrivacyMode }> = [
   { label: "Send raw", value: "send_raw" },
@@ -55,13 +55,11 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const [config, setConfig] = useState<SyncplayConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("connection");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("player");
   const [detectedPlayers, setDetectedPlayers] = useState<DetectedPlayer[]>([]);
   const [detectingPlayers, setDetectingPlayers] = useState(false);
   const [playersUpdatedAt, setPlayersUpdatedAt] = useState<number | null>(null);
   const [playersError, setPlayersError] = useState<string | null>(null);
-  const [serverAddress, setServerAddress] = useState("");
-  const [serverAddressError, setServerAddressError] = useState<string | null>(null);
   const [playerArgsInput, setPlayerArgsInput] = useState("");
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutoSaveRef = useRef(true);
@@ -90,8 +88,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     try {
       const loadedConfig = await invoke<SyncplayConfig>("get_config");
       setConfig(loadedConfig);
-      setServerAddress(`${loadedConfig.server.host}:${loadedConfig.server.port}`);
-      setServerAddressError(null);
       skipAutoSaveRef.current = true;
     } catch (err) {
       setError(err as string);
@@ -137,46 +133,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       await refreshPlayers();
     })();
   }, [isOpen, activeTab]);
-
-  const parseAddress = (address: string): { host: string; port: number } | null => {
-    const trimmed = address.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const lastColon = trimmed.lastIndexOf(":");
-    if (lastColon <= 0 || lastColon === trimmed.length - 1) {
-      return null;
-    }
-    const host = trimmed.slice(0, lastColon).trim();
-    const portValue = trimmed.slice(lastColon + 1).trim();
-    const port = Number.parseInt(portValue, 10);
-    if (!host || Number.isNaN(port) || port <= 0 || port > 65535) {
-      return null;
-    }
-    return { host, port };
-  };
-
-  const handleAddressChange = (value: string) => {
-    setServerAddress(value);
-    const parsed = parseAddress(value);
-    if (!parsed) {
-      setServerAddressError(value.trim() ? "Address must be in host:port format" : null);
-      return;
-    }
-    setServerAddressError(null);
-    setConfig((prev) =>
-      prev
-        ? {
-            ...prev,
-            server: {
-              ...prev.server,
-              host: parsed.host,
-              port: parsed.port,
-            },
-          }
-        : prev
-    );
-  };
 
   const updatePlayerArguments = (value: string) => {
     if (!config) return;
@@ -257,7 +213,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           <>
             <div className="flex flex-wrap gap-2 mb-4 border-b app-divider">
               {[
-                { id: "connection", label: "Connection" },
                 { id: "player", label: "Player" },
                 { id: "sync", label: "Sync" },
                 { id: "ready", label: "Readiness" },
@@ -275,104 +230,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 </button>
               ))}
             </div>
-
-            {activeTab === "connection" && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Server Address</label>
-                  <input
-                    type="text"
-                    value={serverAddress}
-                    onChange={(e) => handleAddressChange(e.target.value)}
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                    placeholder="syncplay.pl:8999"
-                  />
-                  {serverAddressError ? (
-                    <p className="text-xs app-text-danger mt-1">{serverAddressError}</p>
-                  ) : (
-                    <p className="text-xs app-text-muted mt-1">Format: host:port</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Password (optional)</label>
-                  <input
-                    type="password"
-                    value={config.server.password || ""}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        server: {
-                          ...config.server,
-                          password: e.target.value || null,
-                        },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Username</label>
-                  <input
-                    type="text"
-                    value={config.user.username}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        user: { ...config.user, username: e.target.value },
-                      })
-                    }
-                    className="w-full app-input px-3 py-2 rounded focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.autosave_joins_to_list}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, autosave_joins_to_list: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Auto-save joined rooms
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.auto_connect}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, auto_connect: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Auto-connect on startup
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={config.user.force_gui_prompt}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          user: { ...config.user, force_gui_prompt: e.target.checked },
-                        })
-                      }
-                      className="w-4 h-4"
-                    />
-                    Always show connect dialog on startup
-                  </label>
-                </div>
-              </div>
-            )}
 
             {activeTab === "player" && (
               <div className="space-y-4">

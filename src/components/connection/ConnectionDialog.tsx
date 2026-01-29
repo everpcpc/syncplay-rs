@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LuSettings } from "react-icons/lu";
 import { useSyncplayStore } from "../../store";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
@@ -145,6 +146,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   });
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showOptions, setShowOptions] = useState(false);
 
   const serverOptions = buildServerOptions(config?.recent_servers ?? [], config?.public_servers);
   const roomOptions = config?.user.room_list ?? [];
@@ -217,6 +219,23 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
       default_room: formData.room,
     },
   });
+
+  const updateUserConfig = async (updates: Partial<SyncplayConfig["user"]>) => {
+    if (!config) return;
+    const nextConfig = {
+      ...config,
+      user: {
+        ...config.user,
+        ...updates,
+      },
+    };
+    setConfig(nextConfig);
+    try {
+      await invoke("update_config", { config: nextConfig });
+    } catch (err) {
+      setError("Failed to update connection settings");
+    }
+  };
 
   const addRoomToList = (rooms: string[], room: string) => {
     const trimmed = room.trim();
@@ -403,6 +422,52 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
                 placeholder="Server password"
               />
             </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Connection Options</span>
+              <button
+                type="button"
+                className="btn-neutral app-icon-button"
+                onClick={() => setShowOptions((prev) => !prev)}
+                aria-label="Toggle connection options"
+              >
+                <LuSettings className="app-icon" />
+              </button>
+            </div>
+
+            {showOptions && config && (
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.autosave_joins_to_list}
+                    onChange={(e) =>
+                      updateUserConfig({ autosave_joins_to_list: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  Auto-save joined rooms
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.auto_connect}
+                    onChange={(e) => updateUserConfig({ auto_connect: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  Auto-connect on startup
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={config.user.force_gui_prompt}
+                    onChange={(e) => updateUserConfig({ force_gui_prompt: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  Always show connect dialog on startup
+                </label>
+              </div>
+            )}
 
             {error && <div className="app-alert app-alert-danger px-4 py-2 text-sm">{error}</div>}
 
