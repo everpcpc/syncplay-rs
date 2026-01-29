@@ -46,6 +46,7 @@ interface SyncplayStore {
   messages: ChatMessage[];
   playlist: PlaylistState;
   player: PlayerState;
+  rttMs: number | null;
   config: SyncplayConfig | null;
 
   // Actions
@@ -55,6 +56,7 @@ interface SyncplayStore {
   addMessage: (message: ChatMessage) => void;
   setPlaylist: (playlist: PlaylistState) => void;
   setPlayerState: (state: PlayerState) => void;
+  setRttMs: (rttMs: number | null) => void;
   setConfig: (config: SyncplayConfig) => void;
 
   // Event listener setup
@@ -83,6 +85,7 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
     paused: true,
     speed: 1.0,
   },
+  rttMs: null,
   config: null,
 
   // Actions
@@ -116,6 +119,11 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
       player: { ...state.player, ...playerState },
     })),
 
+  setRttMs: (rttMs) =>
+    set(() => ({
+      rttMs,
+    })),
+
   setConfig: (config) =>
     set(() => ({
       config,
@@ -138,6 +146,7 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
     listenSafe<ConnectionState>("connection-status-changed", (event) => {
       set(() => ({
         connection: event.payload,
+        rttMs: null,
       }));
     });
 
@@ -172,6 +181,12 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
     listenSafe<PlayerState>("player-state-changed", (event) => {
       set((state) => ({
         player: { ...state.player, ...event.payload },
+      }));
+    });
+
+    listenSafe<{ rttMs: number }>("ping-updated", (event) => {
+      set(() => ({
+        rttMs: event.payload.rttMs,
       }));
     });
 

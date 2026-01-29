@@ -2,11 +2,12 @@
 
 use crate::app_state::AppState;
 use crate::client::chat::ChatCommand;
+use crate::commands::connection::{reidentify_as_controller, store_control_password};
 use crate::network::messages::ProtocolMessage;
 use crate::network::messages::{
     ChatMessage as ProtocolChatMessage, ReadyState, RoomInfo, SetMessage,
 };
-use crate::utils::truncate_text;
+use crate::utils::{parse_controlled_room_input, truncate_text};
 use std::sync::Arc;
 use tauri::State;
 
@@ -39,9 +40,14 @@ pub async fn send_chat_message(
         match command {
             ChatCommand::Room(room) => {
                 tracing::info!("Command: Change room to {}", room);
+                let (normalized_room, control_password) = parse_controlled_room_input(&room);
+                let room = normalized_room;
+                if let Some(password) = control_password {
+                    store_control_password(state.inner(), &room, &password, true);
+                }
                 state.client_state.set_room(room);
                 let set_msg = ProtocolMessage::Set {
-                    Set: SetMessage {
+                    Set: Box::new(SetMessage {
                         room: Some(RoomInfo {
                             name: state.client_state.get_room(),
                             password: None,
@@ -51,10 +57,14 @@ pub async fn send_chat_message(
                         ready: None,
                         playlist_index: None,
                         playlist_change: None,
+                        controller_auth: None,
+                        new_controlled_room: None,
                         features: None,
-                    },
+                    }),
                 };
                 send_to_server(&state, set_msg)?;
+                send_to_server(&state, ProtocolMessage::List { List: None })?;
+                reidentify_as_controller(state.inner());
             }
             ChatCommand::List => {
                 tracing::info!("Command: List users");
@@ -94,7 +104,7 @@ pub async fn send_chat_message(
                 state.client_state.set_ready(true);
                 let username = state.client_state.get_username();
                 let set_msg = ProtocolMessage::Set {
-                    Set: SetMessage {
+                    Set: Box::new(SetMessage {
                         room: None,
                         file: None,
                         user: None,
@@ -106,8 +116,10 @@ pub async fn send_chat_message(
                         }),
                         playlist_index: None,
                         playlist_change: None,
+                        controller_auth: None,
+                        new_controlled_room: None,
                         features: None,
-                    },
+                    }),
                 };
                 send_to_server(&state, set_msg)?;
             }
@@ -116,7 +128,7 @@ pub async fn send_chat_message(
                 state.client_state.set_ready(false);
                 let username = state.client_state.get_username();
                 let set_msg = ProtocolMessage::Set {
-                    Set: SetMessage {
+                    Set: Box::new(SetMessage {
                         room: None,
                         file: None,
                         user: None,
@@ -128,8 +140,10 @@ pub async fn send_chat_message(
                         }),
                         playlist_index: None,
                         playlist_change: None,
+                        controller_auth: None,
+                        new_controlled_room: None,
                         features: None,
-                    },
+                    }),
                 };
                 send_to_server(&state, set_msg)?;
             }

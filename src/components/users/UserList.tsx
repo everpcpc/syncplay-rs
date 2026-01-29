@@ -129,7 +129,7 @@ export function UserList() {
 
               <div className="flex items-center gap-2 mt-1">
                 <span
-                  className={`text-xs px-2 py-0.5 rounded ${
+                  className={`text-xs px-2.5 py-0.5 rounded-full ${
                     user.isReady ? "app-tag-success" : "app-tag-muted"
                   }`}
                 >

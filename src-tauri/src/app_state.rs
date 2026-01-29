@@ -1,5 +1,6 @@
 use anyhow::Result;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -60,6 +61,14 @@ pub struct AppState {
     pub detected_players: Arc<Mutex<Vec<crate::player::detection::DetectedPlayer>>>,
     /// Timestamp (ms) when players were detected
     pub detected_players_updated_at: Arc<Mutex<Option<i64>>>,
+    /// Controlled room passwords
+    pub controlled_room_passwords: Arc<Mutex<HashMap<String, String>>>,
+    /// Last controller password attempt
+    pub last_control_password_attempt: Arc<Mutex<Option<String>>>,
+    /// Room warning state
+    pub room_warning_state: Arc<Mutex<RoomWarningState>>,
+    /// Whether the room warning task is running
+    pub room_warning_task_running: Arc<Mutex<bool>>,
 }
 
 impl AppState {
@@ -88,6 +97,10 @@ impl AppState {
             player_connecting: Arc::new(Mutex::new(false)),
             detected_players: Arc::new(Mutex::new(Vec::new())),
             detected_players_updated_at: Arc::new(Mutex::new(None)),
+            controlled_room_passwords: Arc::new(Mutex::new(HashMap::new())),
+            last_control_password_attempt: Arc::new(Mutex::new(None)),
+            room_warning_state: Arc::new(Mutex::new(RoomWarningState::default())),
+            room_warning_task_running: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -146,6 +159,10 @@ impl Default for AppState {
             player_connecting: Arc::new(Mutex::new(false)),
             detected_players: Arc::new(Mutex::new(Vec::new())),
             detected_players_updated_at: Arc::new(Mutex::new(None)),
+            controlled_room_passwords: Arc::new(Mutex::new(HashMap::new())),
+            last_control_password_attempt: Arc::new(Mutex::new(None)),
+            room_warning_state: Arc::new(Mutex::new(RoomWarningState::default())),
+            room_warning_task_running: Arc::new(Mutex::new(false)),
         }
     }
 }
@@ -158,6 +175,13 @@ pub struct AutoPlayState {
     pub unpause_action: UnpauseAction,
     pub countdown_active: bool,
     pub countdown_remaining: i32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RoomWarningState {
+    pub alone: bool,
+    pub file_differences: Option<String>,
+    pub not_ready: Option<String>,
 }
 
 impl Default for AutoPlayState {

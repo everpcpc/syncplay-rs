@@ -63,7 +63,7 @@ pub async fn update_playlist(
     let username = state.client_state.get_username();
     if matches!(action.as_str(), "add" | "remove" | "clear") {
         let message = ProtocolMessage::Set {
-            Set: SetMessage {
+            Set: Box::new(SetMessage {
                 room: None,
                 file: None,
                 user: None,
@@ -73,8 +73,10 @@ pub async fn update_playlist(
                     user: Some(username.clone()),
                     files: items.clone(),
                 }),
+                controller_auth: None,
+                new_controlled_room: None,
                 features: None,
-            },
+            }),
         };
         send_to_server(&state, message)?;
     }
@@ -82,7 +84,7 @@ pub async fn update_playlist(
     if current_index != previous_index {
         if let Some(index) = current_index {
             let message = ProtocolMessage::Set {
-                Set: SetMessage {
+                Set: Box::new(SetMessage {
                     room: None,
                     file: None,
                     user: None,
@@ -92,8 +94,10 @@ pub async fn update_playlist(
                         index: Some(index),
                     }),
                     playlist_change: None,
+                    controller_auth: None,
+                    new_controlled_room: None,
                     features: None,
-                },
+                }),
             };
             send_to_server(&state, message)?;
         }

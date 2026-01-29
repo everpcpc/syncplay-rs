@@ -12,7 +12,7 @@ pub enum ProtocolMessage {
         Hello: HelloMessage,
     },
     Set {
-        Set: SetMessage,
+        Set: Box<SetMessage>,
     },
     State {
         State: StateMessage,
@@ -75,7 +75,9 @@ impl<'de> Deserialize<'de> for ProtocolMessage {
             }
             "Set" => {
                 let message = serde_json::from_value(val.clone()).map_err(de::Error::custom)?;
-                Ok(ProtocolMessage::Set { Set: message })
+                Ok(ProtocolMessage::Set {
+                    Set: Box::new(message),
+                })
             }
             "State" => {
                 let message = serde_json::from_value(val.clone()).map_err(de::Error::custom)?;
@@ -164,6 +166,10 @@ pub struct SetMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist_change: Option<PlaylistChange>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub controller_auth: Option<ControllerAuth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_controlled_room: Option<NewControlledRoom>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<Value>,
 }
 
@@ -209,6 +215,28 @@ pub struct UserEvent {
     pub left: Option<bool>,
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerAuth {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewControlledRoom {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

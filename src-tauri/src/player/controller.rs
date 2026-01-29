@@ -725,7 +725,7 @@ fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
     };
 
     let message = ProtocolMessage::Set {
-        Set: SetMessage {
+        Set: Box::new(SetMessage {
             room: None,
             file: Some(FileInfo {
                 name,
@@ -736,8 +736,10 @@ fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
             ready: None,
             playlist_index: None,
             playlist_change: None,
+            controller_auth: None,
+            new_controlled_room: None,
             features: None,
-        },
+        }),
     };
     if let Err(e) = connection.send(message) {
         tracing::warn!("Failed to send file update: {}", e);
@@ -764,11 +766,16 @@ fn should_send_state(
 ) -> bool {
     let global = state.client_state.get_global_state();
     let pause_change = match last_sent {
-        Some(prev) => prev.paused != player_state.paused && Some(global.paused) != player_state.paused,
+        Some(prev) => {
+            prev.paused != player_state.paused && Some(global.paused) != player_state.paused
+        }
         None => false,
     };
 
-    let seeked = match (last_sent.and_then(|snapshot| snapshot.position), player_state.position) {
+    let seeked = match (
+        last_sent.and_then(|snapshot| snapshot.position),
+        player_state.position,
+    ) {
         (Some(prev_pos), Some(current_pos)) => {
             let player_diff = (current_pos - prev_pos).abs();
             let global_diff = (current_pos - global.position).abs();
@@ -795,9 +802,10 @@ fn is_placeholder_file(state: &Arc<AppState>, player_state: &PlayerState) -> boo
             return true;
         }
     }
-    if let (Some(path), Some(placeholder_path)) =
-        (player_state.path.as_deref(), resolve_placeholder_path(state))
-    {
+    if let (Some(path), Some(placeholder_path)) = (
+        player_state.path.as_deref(),
+        resolve_placeholder_path(state),
+    ) {
         return Path::new(path) == placeholder_path;
     }
     false
@@ -848,7 +856,7 @@ async fn handle_end_of_file(state: &Arc<AppState>) {
         if let Some(index) = state.playlist.get_current_index() {
             let username = state.client_state.get_username();
             let message = ProtocolMessage::Set {
-                Set: SetMessage {
+                Set: Box::new(SetMessage {
                     room: None,
                     file: None,
                     user: None,
@@ -858,8 +866,10 @@ async fn handle_end_of_file(state: &Arc<AppState>) {
                         index: Some(index),
                     }),
                     playlist_change: None,
+                    controller_auth: None,
+                    new_controlled_room: None,
                     features: None,
-                },
+                }),
             };
             if let Some(connection) = state.connection.lock().clone() {
                 if let Err(e) = connection.send(message) {
@@ -935,7 +945,7 @@ fn send_ready_state(
     state.client_state.set_ready(is_ready);
     let username = state.client_state.get_username();
     let message = ProtocolMessage::Set {
-        Set: SetMessage {
+        Set: Box::new(SetMessage {
             room: None,
             file: None,
             user: None,
@@ -947,8 +957,10 @@ fn send_ready_state(
             }),
             playlist_index: None,
             playlist_change: None,
+            controller_auth: None,
+            new_controlled_room: None,
             features: None,
-        },
+        }),
     };
 
     let Some(connection) = state.connection.lock().clone() else {

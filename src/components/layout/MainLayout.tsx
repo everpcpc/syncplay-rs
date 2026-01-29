@@ -6,8 +6,6 @@ import {
   LuColumns2,
   LuContrast,
   LuLock,
-  LuLockOpen,
-  LuClock,
   LuDroplet,
   LuDroplets,
   LuLink2,
@@ -17,6 +15,7 @@ import {
   LuRows2,
   LuSettings,
   LuSun,
+  LuZap,
 } from "react-icons/lu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWindowDrag } from "../../hooks/useWindowDrag";
@@ -47,6 +46,7 @@ export function MainLayout() {
   const [transparencyMode, setTransparencyMode] = useState<TransparencyPreference>("off");
   const connection = useSyncplayStore((state) => state.connection);
   const tlsStatus = useSyncplayStore((state) => state.tlsStatus);
+  const rttMs = useSyncplayStore((state) => state.rttMs);
   const config = useSyncplayStore((state) => state.config);
   const setConfig = useSyncplayStore((state) => state.setConfig);
   const addNotification = useNotificationStore((state) => state.addNotification);
@@ -201,28 +201,13 @@ export function MainLayout() {
   useWindowDrag("titlebar");
   useWindowDrag("toolbar-drag");
 
-  const tlsLabel =
-    tlsStatus === "enabled"
-      ? "TLS enabled"
-      : tlsStatus === "pending"
-        ? "TLS pending"
-        : tlsStatus === "unsupported"
-          ? "TLS unsupported"
-          : "TLS unknown";
-  const tlsTagClass =
-    tlsStatus === "enabled"
-      ? "app-tag-success"
-      : tlsStatus === "pending"
-        ? "app-tag-accent"
-        : "app-tag-muted";
-  const tlsIcon =
-    tlsStatus === "enabled" ? (
-      <LuLock className="app-icon" />
-    ) : tlsStatus === "pending" ? (
-      <LuClock className="app-icon" />
-    ) : (
-      <LuLockOpen className="app-icon" />
-    );
+  const showTls = connection.connected && tlsStatus === "enabled";
+  const formatRtt = (value: number | null) => {
+    if (value === null || Number.isNaN(value)) return "";
+    const rounded = Math.max(0, Math.round(value));
+    return `${rounded}ms`;
+  };
+  const rttLabel = formatRtt(rttMs);
 
   return (
     <div className="app-shell">
@@ -327,13 +312,23 @@ export function MainLayout() {
                   </button>
                 </div>
                 <div className="flex items-center gap-2 ml-auto">
-                  {connection.connected && (
+                  {connection.connected && rttLabel && (
                     <div
-                      className={`flex items-center justify-center px-2 py-1 rounded text-xs ${tlsTagClass}`}
-                      aria-label={tlsLabel}
-                      title={tlsLabel}
+                      className="flex items-center gap-2 app-panel-muted px-2.5 py-1 rounded-full text-xs"
+                      aria-label={`RTT ${rttLabel}`}
+                      title={`RTT ${rttLabel}`}
                     >
-                      {tlsIcon}
+                      <LuZap className="app-icon" />
+                      <span className="font-mono">{rttLabel}</span>
+                    </div>
+                  )}
+                  {showTls && (
+                    <div
+                      className="flex items-center justify-center px-2 py-1 rounded text-xs app-tag-success"
+                      aria-label="TLS enabled"
+                      title="TLS enabled"
+                    >
+                      <LuLock className="app-icon" />
                     </div>
                   )}
                   <button

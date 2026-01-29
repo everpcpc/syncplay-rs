@@ -210,6 +210,47 @@ pub fn parse_player_arguments(value: &str) -> Vec<String> {
         .unwrap_or_else(|_| value.split_whitespace().map(|s| s.to_string()).collect())
 }
 
+pub fn strip_control_password(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .to_uppercase()
+}
+
+pub fn parse_controlled_room_input(room: &str) -> (String, Option<String>) {
+    if !room.starts_with('+') {
+        return (room.to_string(), None);
+    }
+    let parts: Vec<&str> = room.split(':').collect();
+    if parts.len() < 3 {
+        return (room.to_string(), None);
+    }
+    let normalized_room = format!("{}:{}", parts[0], parts[1]);
+    let password = strip_control_password(parts[2]);
+    let password = if password.is_empty() {
+        None
+    } else {
+        Some(password)
+    };
+    (normalized_room, password)
+}
+
+pub fn is_controlled_room(room: &str) -> bool {
+    if !room.starts_with('+') {
+        return false;
+    }
+    let parts: Vec<&str> = room.split(':').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let hash = parts[1];
+    if hash.len() != 12 {
+        return false;
+    }
+    hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 pub fn truncate_text(value: &str, max_length: usize) -> String {
     value.chars().take(max_length).collect()
 }

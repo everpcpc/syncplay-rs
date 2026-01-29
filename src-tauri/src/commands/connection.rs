@@ -4,20 +4,25 @@ use crate::app_state::{AppState, ConnectionStatusEvent};
 use crate::config::{save_config, ServerConfig};
 use crate::network::connection::Connection;
 use crate::network::messages::{
-    ClientFeatures, HelloMessage, PlayState, ProtocolMessage, RoomInfo, SetMessage, StateMessage,
-    TLSMessage, UserUpdate,
+    ClientFeatures, ControllerAuth, HelloMessage, NewControlledRoom, PlayState, ProtocolMessage,
+    RoomInfo, SetMessage, StateMessage, TLSMessage, UserUpdate,
 };
 use crate::network::tls::create_tls_connector;
 use crate::player::controller::{
     ensure_player_connected, load_media_by_name, load_placeholder_if_empty, stop_player,
 };
 use crate::player::properties::PlayerState;
-use crate::utils::same_filename;
+use crate::utils::{
+    is_controlled_room, parse_controlled_room_input, same_filename, strip_control_password,
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime, State};
-use tokio::time::{sleep, Duration};
+use tokio::time::{interval, sleep, Duration};
 
 const AUTOPLAY_DELAY_SECONDS: i32 = 3;
+const DIFFERENT_DURATION_THRESHOLD: f64 = 2.5;
+const WARNING_OSD_INTERVAL_SECONDS: u64 = 1;
+const OSD_MESSAGE_SEPARATOR: &str = "; ";
 
 struct ConnectionSnapshot<'a> {
     host: &'a str,
@@ -44,10 +49,20 @@ pub async fn connect_to_server<R: Runtime>(
         username,
         room
     );
+    emit_system_message(
+        state.inner(),
+        &format!("Attempting to connect to {}:{}", host, port),
+    );
 
     // Check if already connected
     if state.is_connected() {
         return Err("Already connected to a server".to_string());
+    }
+
+    let (normalized_room, control_password) = parse_controlled_room_input(&room);
+    let room = normalized_room;
+    if let Some(password) = control_password {
+        store_control_password(state.inner(), &room, &password, true);
     }
 
     // Create new connection
@@ -83,6 +98,8 @@ pub async fn connect_to_server<R: Runtime>(
             *state.hello_sent.lock() = false;
 
             if create_tls_connector().is_ok() {
+                emit_system_message(state.inner(), "Attempting secure connection");
+                emit_system_message(state.inner(), &format!("Successfully reached {}", host));
                 let tls_request = ProtocolMessage::TLS {
                     TLS: TLSMessage {
                         start_tls: Some("send".to_string()),
@@ -100,6 +117,7 @@ pub async fn connect_to_server<R: Runtime>(
                 }
             } else {
                 tracing::info!("TLS not supported by client, sending Hello");
+                emit_system_message(state.inner(), &format!("Successfully reached {}", host));
                 state.emit_event(
                     "tls-status-changed",
                     serde_json::json!({ "status": "unsupported" }),
@@ -133,6 +151,7 @@ pub async fn connect_to_server<R: Runtime>(
             } else if let Err(e) = load_placeholder_if_empty(state.inner()).await {
                 tracing::warn!("Failed to load placeholder: {}", e);
             }
+            start_room_warning_loop(state.inner().clone());
 
             // Emit connection status event
             state.emit_event(
@@ -168,6 +187,7 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
         ProtocolMessage::Hello { Hello } => {
             tracing::info!("Received hello message: {:?}", Hello);
             state.client_state.set_server_version(Hello.realversion);
+            emit_system_message(state, &format!("Hello {},", Hello.username));
             if let Some(motd) = Hello.motd {
                 state.emit_event(
                     "chat-message-received",
@@ -179,6 +199,13 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                     }),
                 );
             }
+            emit_system_message(state, "Successfully connected to server");
+            if let Some(connection) = state.connection.lock().clone() {
+                if let Err(e) = connection.send(ProtocolMessage::List { List: None }) {
+                    tracing::warn!("Failed to request user list: {}", e);
+                }
+            }
+            reidentify_as_controller(state);
         }
         ProtocolMessage::List { List } => {
             tracing::info!("Received user list: {:?}", List);
@@ -202,6 +229,7 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 }
                 emit_user_list(state);
                 evaluate_autoplay(state);
+                update_room_warnings(state, false);
             }
         }
         ProtocolMessage::Chat { Chat } => {
@@ -237,6 +265,8 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                         .lock()
                         .receive_message(client_latency, server_rtt);
                     message_age = state.ping_service.lock().get_last_forward_delay();
+                    let rtt_ms = state.ping_service.lock().get_rtt() * 1000.0;
+                    state.emit_event("ping-updated", serde_json::json!({ "rttMs": rtt_ms }));
                 }
                 *state.last_latency_calculation.lock() = ping.latency_calculation;
                 if let Some(connection) = state.connection.lock().clone() {
@@ -278,7 +308,7 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
         }
         ProtocolMessage::Set { Set } => {
             tracing::info!("Received set message: {:?}", Set);
-            handle_set_message(state, Set).await;
+            handle_set_message(state, *Set).await;
         }
         ProtocolMessage::TLS { TLS } => {
             tracing::info!("Received TLS message: {:?}", TLS);
@@ -372,7 +402,8 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
                     tracing::warn!("Failed to set slowdown: {}", e);
                 }
                 if actor_name != state.client_state.get_username() {
-                    let message = format!("Slowing down due to time difference with {}", actor_name);
+                    let message =
+                        format!("Slowing down due to time difference with {}", actor_name);
                     emit_system_message(state, &message);
                     maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
                 }
@@ -390,6 +421,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     }
 
     evaluate_autoplay(state);
+    update_room_warnings(state, false);
 }
 
 fn emit_system_message(state: &Arc<AppState>, message: &str) {
@@ -405,7 +437,25 @@ fn emit_system_message(state: &Arc<AppState>, message: &str) {
     );
 }
 
-fn maybe_show_osd(state: &Arc<AppState>, config: &crate::config::SyncplayConfig, message: &str, allow: bool) {
+fn emit_error_message(state: &Arc<AppState>, message: &str) {
+    state.chat.add_error_message(message.to_string());
+    state.emit_event(
+        "chat-message-received",
+        serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "username": null,
+            "message": message,
+            "messageType": "error",
+        }),
+    );
+}
+
+fn maybe_show_osd(
+    state: &Arc<AppState>,
+    config: &crate::config::SyncplayConfig,
+    message: &str,
+    allow: bool,
+) {
     if !allow || !config.user.show_osd {
         return;
     }
@@ -413,6 +463,158 @@ fn maybe_show_osd(state: &Arc<AppState>, config: &crate::config::SyncplayConfig,
     let Some(player) = player else { return };
     if let Err(e) = player.show_osd(message, Some(config.user.osd_duration)) {
         tracing::warn!("Failed to show OSD: {}", e);
+    }
+}
+
+fn start_room_warning_loop(state: Arc<AppState>) {
+    let mut running = state.room_warning_task_running.lock();
+    if *running {
+        return;
+    }
+    *running = true;
+    drop(running);
+
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(WARNING_OSD_INTERVAL_SECONDS));
+        loop {
+            ticker.tick().await;
+            if !state.is_connected() {
+                *state.room_warning_task_running.lock() = false;
+                break;
+            }
+            update_room_warnings(&state, true);
+        }
+    });
+}
+
+fn update_room_warnings(state: &Arc<AppState>, osd_only: bool) {
+    let config = state.config.lock().clone();
+    let warnings = compute_room_warning_state(state, &config);
+    let mut last = state.room_warning_state.lock();
+
+    if !osd_only && warnings.alone && !last.alone {
+        emit_system_message(state, "You're alone in the room");
+    }
+
+    if config.user.show_osd_warnings {
+        show_room_warning_osd(state, &config, &warnings);
+    }
+
+    *last = warnings;
+}
+
+fn show_room_warning_osd(
+    state: &Arc<AppState>,
+    config: &crate::config::SyncplayConfig,
+    warnings: &crate::app_state::RoomWarningState,
+) {
+    if !config.user.show_osd {
+        return;
+    }
+
+    let message = if warnings.alone {
+        Some("You're alone in the room".to_string())
+    } else {
+        match (&warnings.file_differences, &warnings.not_ready) {
+            (Some(file_diff), Some(not_ready)) => Some(format!(
+                "File differences: {}{}{}",
+                file_diff, OSD_MESSAGE_SEPARATOR, not_ready
+            )),
+            (Some(file_diff), None) => Some(format!("File differences: {}", file_diff)),
+            (None, Some(not_ready)) => Some(not_ready.to_string()),
+            (None, None) => None,
+        }
+    };
+
+    let Some(message) = message else { return };
+    maybe_show_osd(state, config, &message, true);
+}
+
+fn compute_room_warning_state(
+    state: &Arc<AppState>,
+    config: &crate::config::SyncplayConfig,
+) -> crate::app_state::RoomWarningState {
+    let current_room = state.client_state.get_room();
+    let current_username = state.client_state.get_username();
+    let users = state.client_state.get_users();
+    let users_in_room: Vec<crate::client::state::User> = users
+        .into_iter()
+        .filter(|user| user.room == current_room)
+        .collect();
+
+    if users_in_room.is_empty() {
+        return crate::app_state::RoomWarningState::default();
+    }
+
+    let others_in_room: Vec<crate::client::state::User> = users_in_room
+        .iter()
+        .filter(|user| user.username != current_username)
+        .cloned()
+        .collect();
+    let alone = others_in_room.is_empty();
+
+    let current_file = state.client_state.get_file();
+    let current_size = state.client_state.get_file_size();
+    let current_duration = state.client_state.get_file_duration();
+    let mut diff_name = false;
+    let mut diff_size = false;
+    let mut diff_duration = false;
+    if let Some(current_file) = current_file.as_ref() {
+        for user in others_in_room.iter() {
+            let Some(other_file) = user.file.as_ref() else {
+                continue;
+            };
+            if !same_filename(Some(current_file), Some(other_file)) {
+                diff_name = true;
+            }
+            if !crate::utils::same_filesize(current_size.as_ref(), user.file_size.as_ref()) {
+                diff_size = true;
+            }
+            if !same_duration(
+                current_duration,
+                user.file_duration,
+                config.user.show_duration_notification,
+            ) {
+                diff_duration = true;
+            }
+        }
+    }
+
+    let mut diff_parts = Vec::new();
+    if diff_name {
+        diff_parts.push("name");
+    }
+    if diff_size {
+        diff_parts.push("size");
+    }
+    if diff_duration {
+        diff_parts.push("duration");
+    }
+    let file_differences = if diff_parts.is_empty() {
+        None
+    } else {
+        Some(diff_parts.join(", "))
+    };
+
+    let not_ready = if alone {
+        None
+    } else {
+        let not_ready_users: Vec<String> = users_in_room
+            .iter()
+            .filter(|user| !user.is_ready)
+            .map(|user| user.username.clone())
+            .collect();
+        if not_ready_users.is_empty() {
+            None
+        } else {
+            Some(format!("Not ready: {}", not_ready_users.join(", ")))
+        }
+    };
+
+    crate::app_state::RoomWarningState {
+        alone,
+        file_differences,
+        not_ready,
     }
 }
 
@@ -445,6 +647,93 @@ fn format_time(time_seconds: f64) -> String {
     }
 }
 
+pub(crate) fn store_control_password(
+    state: &Arc<AppState>,
+    room: &str,
+    password: &str,
+    persist: bool,
+) {
+    let password = strip_control_password(password);
+    if password.is_empty() {
+        return;
+    }
+    state
+        .controlled_room_passwords
+        .lock()
+        .insert(room.to_string(), password.clone());
+
+    if !persist {
+        return;
+    }
+    let config = state.config.lock().clone();
+    if !config.user.autosave_joins_to_list {
+        return;
+    }
+    let room_entry = format!("{}:{}", room, password);
+    if config.user.room_list.contains(&room_entry) {
+        return;
+    }
+    let Some(app) = state.app_handle.lock().clone() else {
+        return;
+    };
+    let mut updated = config.clone();
+    updated.user.room_list.push(room_entry);
+    if let Err(e) = save_config(&app, &updated) {
+        tracing::warn!("Failed to save room list after control password: {}", e);
+        return;
+    }
+    *state.config.lock() = updated.clone();
+    state.emit_event("config-updated", updated);
+}
+
+pub fn reidentify_as_controller(state: &Arc<AppState>) {
+    let room = state.client_state.get_room();
+    if !is_controlled_room(&room) {
+        return;
+    }
+    let password = state.controlled_room_passwords.lock().get(&room).cloned();
+    let Some(password) = password else {
+        return;
+    };
+    let message = format!(
+        "Identifying as room operator with password '{}'...",
+        password
+    );
+    emit_system_message(state, &message);
+    *state.last_control_password_attempt.lock() = Some(password.clone());
+    if let Err(e) = send_controller_auth(state, &room, &password) {
+        tracing::warn!("Failed to send controller auth: {}", e);
+    }
+}
+
+fn send_controller_auth(state: &Arc<AppState>, room: &str, password: &str) -> Result<(), String> {
+    let connection = state.connection.lock().clone();
+    let Some(connection) = connection else {
+        return Err("Not connected to server".to_string());
+    };
+    let message = ProtocolMessage::Set {
+        Set: Box::new(SetMessage {
+            room: None,
+            file: None,
+            user: None,
+            ready: None,
+            playlist_index: None,
+            playlist_change: None,
+            controller_auth: Some(ControllerAuth {
+                room: Some(room.to_string()),
+                password: Some(password.to_string()),
+                user: None,
+                success: None,
+            }),
+            new_controlled_room: None,
+            features: None,
+        }),
+    };
+    connection
+        .send(message)
+        .map_err(|e| format!("Failed to send controller auth: {}", e))
+}
+
 async fn handle_connection_closed(state: &Arc<AppState>) {
     let connection = state.connection.lock().take();
     if connection.is_none() {
@@ -464,6 +753,9 @@ async fn handle_connection_closed(state: &Arc<AppState>) {
     if let Err(e) = stop_player(state).await {
         tracing::warn!("Failed to stop player after disconnect: {}", e);
     }
+
+    *state.room_warning_state.lock() = crate::app_state::RoomWarningState::default();
+    *state.room_warning_task_running.lock() = false;
 
     state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
     state.emit_event(
@@ -491,6 +783,7 @@ async fn handle_connection_closed(state: &Arc<AppState>) {
 async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
     if let Some(room) = set_msg.room {
         state.client_state.set_room(room.name);
+        reidentify_as_controller(state);
     }
 
     if let Some(file) = set_msg.file {
@@ -561,6 +854,14 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
         }
     }
 
+    if let Some(controller_auth) = set_msg.controller_auth {
+        handle_controller_auth(state, controller_auth);
+    }
+
+    if let Some(new_room) = set_msg.new_controlled_room {
+        handle_new_controlled_room(state, new_room).await;
+    }
+
     if users_changed {
         emit_user_list(state);
     }
@@ -598,6 +899,124 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
     evaluate_autoplay(state);
 }
 
+fn handle_controller_auth(state: &Arc<AppState>, auth: ControllerAuth) {
+    let Some(success) = auth.success else {
+        return;
+    };
+    let username = auth
+        .user
+        .clone()
+        .unwrap_or_else(|| state.client_state.get_username());
+    let room = auth
+        .room
+        .clone()
+        .unwrap_or_else(|| state.client_state.get_room());
+    let current_room = state.client_state.get_room();
+    let current_username = state.client_state.get_username();
+    let config = state.config.lock().clone();
+
+    if success {
+        let changed = set_user_controller_status(state, &username, Some(&room), true);
+        if room == current_room {
+            let message = format!("{} authenticated as a room operator", username);
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+        }
+        if username == current_username {
+            if let Some(password) = state.last_control_password_attempt.lock().clone() {
+                store_control_password(state, &room, &password, true);
+            }
+        }
+        if changed {
+            emit_user_list(state);
+        }
+    } else if username == current_username {
+        let message = format!("{} failed to identify as a room operator.", username);
+        emit_error_message(state, &message);
+    }
+}
+
+async fn handle_new_controlled_room(state: &Arc<AppState>, room: NewControlledRoom) {
+    let (Some(room_name), Some(password)) = (room.room_name, room.password) else {
+        return;
+    };
+    let room_with_password = format!("{}:{}", room_name, password);
+    let message = format!(
+        "Created managed room '{}' with password '{}'. Please save this information for future reference!\n\nIn managed rooms everyone is kept in sync with the room operator(s) who are the only ones who can pause, unpause, seek, and change the playlist.\n\nYou should ask regular viewers to join the room '{}' but the room operators can join the room '{}' to automatically authenticate themselves.",
+        room_name,
+        password,
+        room_name,
+        room_with_password,
+    );
+    emit_system_message(state, &message);
+
+    state.client_state.set_room(room_name.clone());
+    if let Some(connection) = state.connection.lock().clone() {
+        let set_room = ProtocolMessage::Set {
+            Set: Box::new(SetMessage {
+                room: Some(RoomInfo {
+                    name: room_name.clone(),
+                    password: None,
+                }),
+                file: None,
+                user: None,
+                ready: None,
+                playlist_index: None,
+                playlist_change: None,
+                controller_auth: None,
+                new_controlled_room: None,
+                features: None,
+            }),
+        };
+        if let Err(e) = connection.send(set_room) {
+            tracing::warn!("Failed to set room after controlled room creation: {}", e);
+            return;
+        }
+        if let Err(e) = connection.send(ProtocolMessage::List { List: None }) {
+            tracing::warn!(
+                "Failed to request list after controlled room creation: {}",
+                e
+            );
+        }
+    }
+    let password = strip_control_password(&password);
+    if !password.is_empty() {
+        *state.last_control_password_attempt.lock() = Some(password.clone());
+        if let Err(e) = send_controller_auth(state, &room_name, &password) {
+            tracing::warn!("Failed to authenticate controller after create: {}", e);
+        }
+    }
+}
+
+fn set_user_controller_status(
+    state: &Arc<AppState>,
+    username: &str,
+    room: Option<&str>,
+    is_controller: bool,
+) -> bool {
+    let mut user = state
+        .client_state
+        .get_user(username)
+        .unwrap_or(crate::client::state::User {
+            username: username.to_string(),
+            room: room
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| state.client_state.get_room()),
+            file: None,
+            file_size: None,
+            file_duration: None,
+            is_ready: false,
+            is_controller: false,
+        });
+    if let Some(room) = room {
+        user.room = room.to_string();
+    }
+    let changed = user.is_controller != is_controller;
+    user.is_controller = is_controller;
+    state.client_state.add_user(user);
+    changed
+}
+
 async fn handle_tls_message(state: &Arc<AppState>, tls: TLSMessage) {
     let Some(answer) = tls.start_tls.as_deref() else {
         return;
@@ -621,6 +1040,7 @@ async fn handle_tls_message(state: &Arc<AppState>, tls: TLSMessage) {
             "tls-status-changed",
             serde_json::json!({ "status": "enabled" }),
         );
+        emit_system_message(state, "Secure connection established");
         send_hello(state);
     } else if answer == "false" {
         tracing::info!("Server does not support TLS, sending Hello");
@@ -724,7 +1144,7 @@ fn send_ready_state(
     state.client_state.set_ready(is_ready);
     let username = state.client_state.get_username();
     let message = ProtocolMessage::Set {
-        Set: SetMessage {
+        Set: Box::new(SetMessage {
             room: None,
             file: None,
             user: None,
@@ -736,8 +1156,10 @@ fn send_ready_state(
             }),
             playlist_index: None,
             playlist_change: None,
+            controller_auth: None,
+            new_controlled_room: None,
             features: None,
-        },
+        }),
     };
     let connection = state.connection.lock().clone();
     let Some(connection) = connection else {
@@ -866,8 +1288,23 @@ async fn pause_local_player(state: &Arc<AppState>) {
 }
 
 fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate) -> bool {
+    let config = state.config.lock().clone();
+    let current_username = state.client_state.get_username();
+    let current_room = state.client_state.get_room();
+    let old_user = state.client_state.get_user(&username);
+
     if let Some(event) = update.event.as_ref() {
         if event.left.unwrap_or(false) {
+            if let Some(old_user) = old_user.as_ref() {
+                let allow_osd = if old_user.room == current_room {
+                    config.user.show_same_room_osd
+                } else {
+                    config.user.show_different_room_osd
+                };
+                let message = format!("{} has left", username);
+                emit_system_message(state, &message);
+                maybe_show_osd(state, &config, &message, allow_osd);
+            }
             state.client_state.remove_user(&username);
             return true;
         }
@@ -889,10 +1326,13 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
     if let Some(room) = update.room {
         user.room = room.name;
     }
+
+    let mut updated_file = None;
     if let Some(file) = update.file {
         user.file = file.name;
         user.file_size = file.size;
         user.file_duration = file.duration;
+        updated_file = Some(());
     }
     if let Some(is_ready) = update.is_ready {
         user.is_ready = is_ready;
@@ -901,8 +1341,140 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
         user.is_controller = controller;
     }
 
+    let room_changed = old_user
+        .as_ref()
+        .map(|old| old.room != user.room)
+        .unwrap_or(true);
+    let file_changed = if updated_file.is_some() {
+        !is_same_file(old_user.as_ref(), &user, &config)
+    } else {
+        false
+    };
+
+    if updated_file.is_some() && file_changed {
+        if let Some(file_name) = user.file.as_ref() {
+            let duration = user.file_duration.unwrap_or(0.0);
+            let duration_text = if duration > 0.0 {
+                format_time(duration)
+            } else {
+                "--:--".to_string()
+            };
+            let mut message = format!(
+                "{} is playing '{}' ({})",
+                username, file_name, duration_text
+            );
+            if current_room != user.room || username == current_username {
+                message.push_str(&format!(" in room: '{}'", user.room));
+            }
+            emit_system_message(state, &message);
+            let allow_osd = allow_osd_for_user(&config, &current_room, old_user.as_ref(), &user);
+            maybe_show_osd(state, &config, &message, allow_osd);
+
+            if username != current_username {
+                if let Some(diff) = file_differences(state, &user, &config) {
+                    let message = format!("Your file differs in the following way(s): {}", diff);
+                    emit_system_message(state, &message);
+                }
+            }
+        }
+    } else if room_changed {
+        let message = format!("{} has joined the room: '{}'", username, user.room);
+        emit_system_message(state, &message);
+        let allow_osd = allow_osd_for_user(&config, &current_room, old_user.as_ref(), &user);
+        maybe_show_osd(state, &config, &message, allow_osd);
+    }
+
     state.client_state.add_user(user);
     true
+}
+
+fn allow_osd_for_user(
+    config: &crate::config::SyncplayConfig,
+    current_room: &str,
+    old_user: Option<&crate::client::state::User>,
+    user: &crate::client::state::User,
+) -> bool {
+    let was_in_room = old_user
+        .map(|old| old.room == current_room)
+        .unwrap_or(false);
+    let is_in_room = user.room == current_room;
+    let allow = if was_in_room || is_in_room {
+        config.user.show_same_room_osd
+    } else {
+        config.user.show_different_room_osd
+    };
+
+    if !config.user.show_non_controller_osd && !user.is_controller {
+        return false;
+    }
+
+    allow
+}
+
+fn is_same_file(
+    old_user: Option<&crate::client::state::User>,
+    new_user: &crate::client::state::User,
+    config: &crate::config::SyncplayConfig,
+) -> bool {
+    let Some(old_user) = old_user else {
+        return false;
+    };
+    let same_name = same_filename(old_user.file.as_deref(), new_user.file.as_deref());
+    let same_size =
+        crate::utils::same_filesize(old_user.file_size.as_ref(), new_user.file_size.as_ref());
+    let same_duration = same_duration(
+        old_user.file_duration,
+        new_user.file_duration,
+        config.user.show_duration_notification,
+    );
+    same_name && same_size && same_duration
+}
+
+fn same_duration(a: Option<f64>, b: Option<f64>, allow: bool) -> bool {
+    if !allow {
+        return true;
+    }
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    (a.round() - b.round()).abs() < DIFFERENT_DURATION_THRESHOLD
+}
+
+fn file_differences(
+    state: &Arc<AppState>,
+    user: &crate::client::state::User,
+    config: &crate::config::SyncplayConfig,
+) -> Option<String> {
+    if user.room != state.client_state.get_room() {
+        return None;
+    }
+    let current_file = state.client_state.get_file();
+    let current_size = state.client_state.get_file_size();
+    let current_duration = state.client_state.get_file_duration();
+    let (Some(current_file), Some(other_file)) = (current_file.as_ref(), user.file.as_ref()) else {
+        return None;
+    };
+
+    let mut differences = Vec::new();
+    if !same_filename(Some(current_file), Some(other_file)) {
+        differences.push("name");
+    }
+    if !crate::utils::same_filesize(current_size.as_ref(), user.file_size.as_ref()) {
+        differences.push("size");
+    }
+    if !same_duration(
+        current_duration,
+        user.file_duration,
+        config.user.show_duration_notification,
+    ) {
+        differences.push("duration");
+    }
+
+    if differences.is_empty() {
+        None
+    } else {
+        Some(differences.join(", "))
+    }
 }
 
 fn emit_user_list(state: &Arc<AppState>) {
@@ -963,6 +1535,8 @@ pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(
         autoplay.countdown_active = false;
         autoplay.countdown_remaining = 0;
     }
+    *state.room_warning_state.lock() = crate::app_state::RoomWarningState::default();
+    *state.room_warning_task_running.lock() = false;
     state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
     state.emit_event(
         "playlist-updated",

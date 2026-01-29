@@ -23,6 +23,7 @@ import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
 export function PlaylistPanel() {
   const playlist = useSyncplayStore((state) => state.playlist);
   const connection = useSyncplayStore((state) => state.connection);
+  const player = useSyncplayStore((state) => state.player);
   const config = useSyncplayStore((state) => state.config);
   const setConfig = useSyncplayStore((state) => state.setConfig);
   const addNotification = useNotificationStore((state) => state.addNotification);
@@ -31,6 +32,18 @@ export function PlaylistPanel() {
 
   const normalizePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+  const formatTime = (seconds: number | null) => {
+    if (seconds === null) return "--:--";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const formatSpeed = (speed: number | null) => {
+    if (speed === null || speed === 1.0) return "";
+    return `${speed.toFixed(2)}x`;
+  };
 
   const updateUserSetting = async <K extends keyof SyncplayConfig["user"]>(
     key: K,
@@ -207,6 +220,26 @@ export function PlaylistPanel() {
                 <LuFolder className="app-icon" />
               </button>
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <div
+              className="flex items-center justify-center w-7 h-7 rounded-md app-panel-muted"
+              aria-label={player.paused ? "Paused" : "Playing"}
+              title={player.paused ? "Paused" : "Playing"}
+            >
+              {player.paused ? <span className="app-text-warning">⏸</span> : <span>▶</span>}
+            </div>
+            {player.position !== null && player.duration !== null && (
+              <span className="font-mono text-xs">
+                {formatTime(player.position)}/{formatTime(player.duration)}
+              </span>
+            )}
+            <span className="font-medium truncate max-w-xs">
+              {player.filename || "No file loaded"}
+            </span>
+            {formatSpeed(player.speed) && (
+              <span className="app-text-warning">{formatSpeed(player.speed)}</span>
+            )}
           </div>
         </div>
       </div>

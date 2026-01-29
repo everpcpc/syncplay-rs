@@ -1,8 +1,10 @@
 // Room command handlers
 
 use crate::app_state::AppState;
+use crate::commands::connection::{reidentify_as_controller, store_control_password};
 use crate::config::save_config;
 use crate::network::messages::{ProtocolMessage, ReadyState, RoomInfo, SetMessage};
+use crate::utils::parse_controlled_room_input;
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime, State};
 
@@ -19,11 +21,17 @@ pub async fn change_room<R: Runtime>(
         return Err("Not connected to server".to_string());
     }
 
+    let (normalized_room, control_password) = parse_controlled_room_input(&room);
+    let room = normalized_room;
+    if let Some(password) = control_password {
+        store_control_password(state.inner(), &room, &password, true);
+    }
+
     // Update client state
     state.client_state.set_room(room.clone());
 
     let message = ProtocolMessage::Set {
-        Set: SetMessage {
+        Set: Box::new(SetMessage {
             room: Some(RoomInfo {
                 name: room.clone(),
                 password: None,
@@ -33,10 +41,14 @@ pub async fn change_room<R: Runtime>(
             ready: None,
             playlist_index: None,
             playlist_change: None,
+            controller_auth: None,
+            new_controlled_room: None,
             features: None,
-        },
+        }),
     };
     send_to_server(&state, message)?;
+    send_to_server(&state, ProtocolMessage::List { List: None })?;
+    reidentify_as_controller(state.inner());
 
     let config = state.config.lock().clone();
     if config.user.autosave_joins_to_list {
@@ -69,7 +81,7 @@ pub async fn set_ready(is_ready: bool, state: State<'_, Arc<AppState>>) -> Resul
 
     let username = state.client_state.get_username();
     let message = ProtocolMessage::Set {
-        Set: SetMessage {
+        Set: Box::new(SetMessage {
             room: None,
             file: None,
             user: None,
@@ -81,8 +93,10 @@ pub async fn set_ready(is_ready: bool, state: State<'_, Arc<AppState>>) -> Resul
             }),
             playlist_index: None,
             playlist_change: None,
+            controller_auth: None,
+            new_controlled_room: None,
             features: None,
-        },
+        }),
     };
     send_to_server(&state, message)?;
 
