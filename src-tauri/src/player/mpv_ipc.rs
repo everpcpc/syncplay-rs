@@ -122,9 +122,10 @@ impl MpvIpc {
                     MpvMessage::Event(event) => {
                         // Handle event
                         if event.event == "property-change" {
-                            if let (Some(id), Some(data)) = (event.id, event.data) {
+                            if let Some(id) = event.id {
                                 if let Some(prop_id) = PropertyId::from_u64(id) {
-                                    state.lock().update_property(prop_id, &data);
+                                    let value = event.data.unwrap_or(serde_json::Value::Null);
+                                    state.lock().update_property(prop_id, &value);
                                 }
                             }
                         } else {
@@ -235,6 +236,7 @@ impl MpvIpc {
     pub async fn set_paused(&self, paused: bool) -> Result<()> {
         let cmd = MpvCommand::set_property("pause", serde_json::Value::Bool(paused), 0);
         self.send_command_async(cmd).await?;
+        self.state.lock().paused = Some(paused);
         Ok(())
     }
 

@@ -151,6 +151,7 @@ pub async fn connect_to_server<R: Runtime>(
                     handle_server_message(message, &state_clone).await;
                 }
                 tracing::info!("Message processing loop ended");
+                handle_connection_closed(&state_clone).await;
             });
 
             Ok(())
@@ -295,10 +296,26 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
 
     let player = state.player.lock().clone();
     let Some(player) = player else { return };
-    let player_state: PlayerState = player.get_state();
+    let mut player_state: PlayerState = player.get_state();
     let (local_position, local_paused) = match (player_state.position, player_state.paused) {
         (Some(pos), Some(paused)) => (pos, paused),
-        _ => return,
+        _ => {
+            if let Err(e) = player.poll_state().await {
+                tracing::warn!("Failed to refresh player state: {}", e);
+                return;
+            }
+            player_state = player.get_state();
+            match (player_state.position, player_state.paused) {
+                (Some(pos), Some(paused)) => (pos, paused),
+                _ => return,
+            }
+        }
+    };
+
+    let adjusted_global_position = if !playstate.paused {
+        playstate.position + message_age
+    } else {
+        playstate.position
     };
 
     let (actions, slowdown_rate) = {
@@ -314,11 +331,24 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         (actions, slowdown_rate)
     };
 
+    let config = state.config.lock().clone();
+    let actor = playstate.set_by.clone();
+    let actor_name = actor.clone().unwrap_or_else(|| "Unknown".to_string());
+
     for action in actions {
         match action {
             crate::client::sync::SyncAction::Seek(position) => {
                 if let Err(e) = player.set_position(position).await {
                     tracing::warn!("Failed to seek: {}", e);
+                }
+                if actor_name != state.client_state.get_username() {
+                    let message = if local_position > adjusted_global_position {
+                        format!("Rewinded due to time difference with {}", actor_name)
+                    } else {
+                        format!("Fast-forwarded due to time difference with {}", actor_name)
+                    };
+                    emit_system_message(state, &message);
+                    maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
                 }
             }
             crate::client::sync::SyncAction::SetPaused(paused) => {
@@ -328,22 +358,134 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
                 if let Err(e) = player.set_paused(paused).await {
                     tracing::warn!("Failed to set paused: {}", e);
                 }
+                let message = if paused {
+                    let timecode = format_time(playstate.position);
+                    format!("{} paused at {}", actor_name, timecode)
+                } else {
+                    format!("{} unpaused", actor_name)
+                };
+                emit_system_message(state, &message);
+                maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
             }
             crate::client::sync::SyncAction::Slowdown => {
                 if let Err(e) = player.set_speed(slowdown_rate).await {
                     tracing::warn!("Failed to set slowdown: {}", e);
+                }
+                if actor_name != state.client_state.get_username() {
+                    let message = format!("Slowing down due to time difference with {}", actor_name);
+                    emit_system_message(state, &message);
+                    maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
                 }
             }
             crate::client::sync::SyncAction::ResetSpeed => {
                 if let Err(e) = player.set_speed(1.0).await {
                     tracing::warn!("Failed to reset speed: {}", e);
                 }
+                let message = "Reverting speed back to normal".to_string();
+                emit_system_message(state, &message);
+                maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
             }
             crate::client::sync::SyncAction::None => {}
         }
     }
 
     evaluate_autoplay(state);
+}
+
+fn emit_system_message(state: &Arc<AppState>, message: &str) {
+    state.chat.add_system_message(message.to_string());
+    state.emit_event(
+        "chat-message-received",
+        serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "username": null,
+            "message": message,
+            "messageType": "system",
+        }),
+    );
+}
+
+fn maybe_show_osd(state: &Arc<AppState>, config: &crate::config::SyncplayConfig, message: &str, allow: bool) {
+    if !allow || !config.user.show_osd {
+        return;
+    }
+    let player = state.player.lock().clone();
+    let Some(player) = player else { return };
+    if let Err(e) = player.show_osd(message, Some(config.user.osd_duration)) {
+        tracing::warn!("Failed to show OSD: {}", e);
+    }
+}
+
+fn format_time(time_seconds: f64) -> String {
+    let mut seconds = time_seconds.round() as i64;
+    let sign = if seconds < 0 {
+        seconds = -seconds;
+        "-"
+    } else {
+        ""
+    };
+
+    let weeks = seconds / 604_800;
+    let days = (seconds % 604_800) / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let secs = seconds % 60;
+
+    if weeks > 0 {
+        format!(
+            "{}{}w, {}d, {:02}:{:02}:{:02}",
+            sign, weeks, days, hours, minutes, secs
+        )
+    } else if days > 0 {
+        format!("{}{}d, {:02}:{:02}:{:02}", sign, days, hours, minutes, secs)
+    } else if hours > 0 {
+        format!("{}{:02}:{:02}:{:02}", sign, hours, minutes, secs)
+    } else {
+        format!("{}{:02}:{:02}", sign, minutes, secs)
+    }
+}
+
+async fn handle_connection_closed(state: &Arc<AppState>) {
+    let connection = state.connection.lock().take();
+    if connection.is_none() {
+        return;
+    }
+
+    state.client_state.clear_users();
+    state.playlist.clear();
+    state.client_state.set_file(None);
+    state.client_state.set_ready(false);
+    {
+        let mut autoplay = state.autoplay.lock();
+        autoplay.countdown_active = false;
+        autoplay.countdown_remaining = 0;
+    }
+
+    if let Err(e) = stop_player(state).await {
+        tracing::warn!("Failed to stop player after disconnect: {}", e);
+    }
+
+    state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
+    state.emit_event(
+        "playlist-updated",
+        crate::app_state::PlaylistEvent {
+            items: Vec::new(),
+            current_index: None,
+        },
+    );
+    state.emit_event(
+        "connection-status-changed",
+        ConnectionStatusEvent {
+            connected: false,
+            server: None,
+        },
+    );
+    state.emit_event(
+        "tls-status-changed",
+        serde_json::json!({ "status": "unknown" }),
+    );
+
+    emit_system_message(state, "Disconnected from server");
 }
 
 async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {

@@ -236,8 +236,13 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
             interval.tick().await;
             let player = state.player.lock().clone();
             let Some(player) = player else { continue };
-            if let Err(e) = player.poll_state().await {
-                tracing::warn!("Failed to poll player state: {}", e);
+            if !matches!(
+                player.kind(),
+                PlayerKind::Mpv | PlayerKind::MpvNet | PlayerKind::Iina
+            ) {
+                if let Err(e) = player.poll_state().await {
+                    tracing::warn!("Failed to poll player state: {}", e);
+                }
             }
             let player_state = player.get_state();
             emit_player_state(&state, &player_state);
@@ -273,7 +278,9 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                 }
             }
 
-            if file_info_changed(&player_state, last_sent.as_ref()) {
+            let is_placeholder = is_placeholder_file(&state, &player_state);
+
+            if !is_placeholder && file_info_changed(&player_state, last_sent.as_ref()) {
                 eof_sent = false;
                 let mut suppress_guard = state.suppress_next_file_update.lock();
                 if *suppress_guard {
@@ -283,7 +290,7 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                 }
             }
 
-            if should_send_state(&player_state, last_sent.as_ref()) {
+            if !is_placeholder && should_send_state(&state, &player_state, last_sent.as_ref()) {
                 if let Some(play_state) = to_play_state(&state, &player_state) {
                     let ping = {
                         let latency_calculation = *state.last_latency_calculation.lock();
@@ -605,10 +612,21 @@ fn start_mpv_process_if_needed(
             } else {
                 tracing::warn!("Placeholder asset not found for player startup");
             }
+            full_args.push("--mpv-keep-open=always".to_string());
+            full_args.push("--mpv-keep-open-pause=yes".to_string());
+            full_args.push("--mpv-idle=yes".to_string());
+            full_args.push("--mpv-input-terminal=no".to_string());
+            full_args.push("--mpv-hr-seek=always".to_string());
+            full_args.push("--mpv-force-window=yes".to_string());
             full_args.push(format!("--mpv-input-ipc-server={}", socket_path));
         }
         _ => {
+            full_args.push("--force-window=yes".to_string());
             full_args.push("--idle=yes".to_string());
+            full_args.push("--keep-open=always".to_string());
+            full_args.push("--keep-open-pause=yes".to_string());
+            full_args.push("--hr-seek=always".to_string());
+            full_args.push("--input-terminal=no".to_string());
             full_args.push("--no-terminal".to_string());
             full_args.push(format!("--input-ipc-server={}", socket_path));
         }
@@ -739,19 +757,27 @@ fn to_play_state(state: &Arc<AppState>, player_state: &PlayerState) -> Option<Pl
     })
 }
 
-fn should_send_state(player_state: &PlayerState, last_sent: Option<&PlayerStateSnapshot>) -> bool {
-    match last_sent {
-        None => true,
-        Some(prev) => {
-            if player_state.paused != prev.paused || player_state.filename != prev.filename {
-                return true;
-            }
-            match (player_state.position, prev.position) {
-                (Some(current), Some(last)) => (current - last).abs() >= 0.5,
-                _ => false,
-            }
+fn should_send_state(
+    state: &Arc<AppState>,
+    player_state: &PlayerState,
+    last_sent: Option<&PlayerStateSnapshot>,
+) -> bool {
+    let global = state.client_state.get_global_state();
+    let pause_change = match last_sent {
+        Some(prev) => prev.paused != player_state.paused && Some(global.paused) != player_state.paused,
+        None => false,
+    };
+
+    let seeked = match (last_sent.and_then(|snapshot| snapshot.position), player_state.position) {
+        (Some(prev_pos), Some(current_pos)) => {
+            let player_diff = (current_pos - prev_pos).abs();
+            let global_diff = (current_pos - global.position).abs();
+            player_diff > 1.0 && global_diff > 1.0
         }
-    }
+        _ => false,
+    };
+
+    pause_change || seeked
 }
 
 fn file_info_changed(player_state: &PlayerState, last_sent: Option<&PlayerStateSnapshot>) -> bool {
@@ -761,6 +787,20 @@ fn file_info_changed(player_state: &PlayerState, last_sent: Option<&PlayerStateS
             prev.filename != player_state.filename || prev.duration != player_state.duration
         }
     }
+}
+
+fn is_placeholder_file(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
+    if let Some(name) = player_state.filename.as_deref() {
+        if name == "placeholder.png" {
+            return true;
+        }
+    }
+    if let (Some(path), Some(placeholder_path)) =
+        (player_state.path.as_deref(), resolve_placeholder_path(state))
+    {
+        return Path::new(path) == placeholder_path;
+    }
+    false
 }
 
 #[derive(Clone, Debug)]
