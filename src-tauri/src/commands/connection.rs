@@ -320,6 +320,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     } else {
         playstate.position
     };
+    let previous_global = state.client_state.get_global_state();
     state.client_state.set_global_state(
         adjusted_global_position,
         playstate.paused,
@@ -345,75 +346,133 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     };
 
     let config = state.config.lock().clone();
-    let (actions, slowdown_rate) = {
-        let mut engine = state.sync_engine.lock();
-        let actions = engine.calculate_sync_actions(crate::client::sync::SyncInputs {
-            local_position,
-            local_paused,
-            global_position: playstate.position,
-            global_paused: playstate.paused,
-            message_age,
-            do_seek: playstate.do_seek.unwrap_or(false),
-            allow_fastforward: should_allow_fastforward(state, &config),
-        });
-        let slowdown_rate = engine.slowdown_rate();
-        (actions, slowdown_rate)
-    };
-    let actor = playstate.set_by.clone();
-    let actor_name = actor.clone().unwrap_or_else(|| "Unknown".to_string());
+    let current_username = state.client_state.get_username();
+    let actor_name = playstate
+        .set_by
+        .clone()
+        .unwrap_or_else(|| "Unknown".to_string());
+    let do_seek = playstate.do_seek.unwrap_or(false);
+    let pause_changed =
+        playstate.paused != previous_global.paused || playstate.paused != local_paused;
 
-    for action in actions {
-        match action {
-            crate::client::sync::SyncAction::Seek(position) => {
-                if let Err(e) = player.set_position(position).await {
-                    tracing::warn!("Failed to seek: {}", e);
+    if do_seek {
+        if actor_name != current_username {
+            if let Err(e) = player.set_position(adjusted_global_position).await {
+                tracing::warn!("Failed to seek: {}", e);
+            }
+        }
+        let message = format!(
+            "{} jumped from {} to {}",
+            actor_name,
+            format_time(local_position),
+            format_time(adjusted_global_position)
+        );
+        emit_system_message(state, &message);
+        maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+    }
+
+    let mut seek_action = None;
+    let mut slowdown_action = false;
+    let mut reset_speed = false;
+    let slowdown_rate = if do_seek {
+        1.0
+    } else {
+        let (actions, slowdown_rate) = {
+            let mut engine = state.sync_engine.lock();
+            let actions = engine.calculate_sync_actions(crate::client::sync::SyncInputs {
+                local_position,
+                local_paused,
+                global_position: playstate.position,
+                global_paused: playstate.paused,
+                message_age,
+                do_seek: false,
+                allow_fastforward: should_allow_fastforward(state, &config),
+            });
+            let slowdown_rate = engine.slowdown_rate();
+            (actions, slowdown_rate)
+        };
+
+        for action in actions {
+            match action {
+                crate::client::sync::SyncAction::Seek(position) => {
+                    seek_action = Some(position);
                 }
-                if actor_name != state.client_state.get_username() {
-                    let message = if local_position > adjusted_global_position {
-                        format!("Rewinded due to time difference with {}", actor_name)
-                    } else {
-                        format!("Fast-forwarded due to time difference with {}", actor_name)
-                    };
-                    emit_system_message(state, &message);
-                    maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+                crate::client::sync::SyncAction::Slowdown => {
+                    slowdown_action = true;
+                }
+                crate::client::sync::SyncAction::ResetSpeed => {
+                    reset_speed = true;
+                }
+                crate::client::sync::SyncAction::SetPaused(_) => {}
+                crate::client::sync::SyncAction::None => {}
+            }
+        }
+
+        slowdown_rate
+    };
+
+    if let Some(position) = seek_action {
+        if actor_name != current_username {
+            if let Err(e) = player.set_position(position).await {
+                tracing::warn!("Failed to seek: {}", e);
+            }
+            let message = if position < local_position {
+                format!("Rewinded due to time difference with {}", actor_name)
+            } else {
+                format!("Fast-forwarded due to time difference with {}", actor_name)
+            };
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+        }
+    }
+
+    if slowdown_action {
+        if actor_name != current_username {
+            if let Err(e) = player.set_speed(slowdown_rate).await {
+                tracing::warn!("Failed to set slowdown: {}", e);
+            }
+            let message = format!("Slowing down due to time difference with {}", actor_name);
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
+        } else {
+            state.sync_engine.lock().reset_slowdown();
+        }
+    }
+
+    if reset_speed {
+        if let Err(e) = player.set_speed(1.0).await {
+            tracing::warn!("Failed to reset speed: {}", e);
+        }
+        let message = "Reverting speed back to normal".to_string();
+        emit_system_message(state, &message);
+        maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
+    }
+
+    if pause_changed {
+        if playstate.paused {
+            if actor_name != current_username {
+                if let Err(e) = player.set_position(adjusted_global_position).await {
+                    tracing::warn!("Failed to sync position on pause: {}", e);
                 }
             }
-            crate::client::sync::SyncAction::SetPaused(paused) => {
-                if !paused {
-                    *state.suppress_unpause_check.lock() = true;
-                }
-                if let Err(e) = player.set_paused(paused).await {
-                    tracing::warn!("Failed to set paused: {}", e);
-                }
-                let message = if paused {
-                    let timecode = format_time(playstate.position);
-                    format!("{} paused at {}", actor_name, timecode)
-                } else {
-                    format!("{} unpaused", actor_name)
-                };
-                emit_system_message(state, &message);
-                maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+            if let Err(e) = player.set_paused(true).await {
+                tracing::warn!("Failed to set paused: {}", e);
             }
-            crate::client::sync::SyncAction::Slowdown => {
-                if let Err(e) = player.set_speed(slowdown_rate).await {
-                    tracing::warn!("Failed to set slowdown: {}", e);
-                }
-                if actor_name != state.client_state.get_username() {
-                    let message =
-                        format!("Slowing down due to time difference with {}", actor_name);
-                    emit_system_message(state, &message);
-                    maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
-                }
+            let message = format!(
+                "{} paused at {}",
+                actor_name,
+                format_time(adjusted_global_position)
+            );
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+        } else {
+            *state.suppress_unpause_check.lock() = true;
+            if let Err(e) = player.set_paused(false).await {
+                tracing::warn!("Failed to set paused: {}", e);
             }
-            crate::client::sync::SyncAction::ResetSpeed => {
-                if let Err(e) = player.set_speed(1.0).await {
-                    tracing::warn!("Failed to reset speed: {}", e);
-                }
-                let message = "Reverting speed back to normal".to_string();
-                emit_system_message(state, &message);
-                maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
-            }
-            crate::client::sync::SyncAction::None => {}
+            let message = format!("{} unpaused", actor_name);
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
         }
     }
 
