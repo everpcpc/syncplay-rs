@@ -493,7 +493,7 @@ fn ensure_mpv_socket_path(state: &Arc<AppState>) -> Result<String, String> {
     {
         let name = build_windows_pipe_name();
         *state.mpv_socket_path.lock() = Some(name.clone());
-        return Ok(name);
+        Ok(name)
     }
 
     #[cfg(unix)]
