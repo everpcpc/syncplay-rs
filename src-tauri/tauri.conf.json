@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Syncplayer",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "identifier": "com.everpcpc.syncplay",
   "build": {
     "beforeDevCommand": "pnpm run dev",
@@ -13,7 +13,9 @@
     "macOSPrivateApi": true,
     "security": {
       "csp": null,
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     },
     "windows": [
       {
@@ -36,7 +38,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/placeholder.png"],
+    "resources": [
+      "resources/placeholder.png"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
