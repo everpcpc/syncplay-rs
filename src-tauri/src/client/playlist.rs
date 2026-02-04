@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, info, warn};
 
 /// Playlist item
@@ -29,6 +30,11 @@ impl PlaylistItem {
 pub struct Playlist {
     items: RwLock<Vec<PlaylistItem>>,
     current_index: RwLock<Option<usize>>,
+    queued_index_filename: RwLock<Option<String>>,
+    previous_playlist: RwLock<Option<Vec<String>>>,
+    previous_playlist_room: RwLock<Option<String>>,
+    switch_to_new_item: RwLock<bool>,
+    last_index_change: RwLock<Option<Instant>>,
 }
 
 impl Playlist {
@@ -36,12 +42,25 @@ impl Playlist {
         Arc::new(Self {
             items: RwLock::new(Vec::new()),
             current_index: RwLock::new(None),
+            queued_index_filename: RwLock::new(None),
+            previous_playlist: RwLock::new(None),
+            previous_playlist_room: RwLock::new(None),
+            switch_to_new_item: RwLock::new(false),
+            last_index_change: RwLock::new(None),
         })
     }
 
     /// Get all playlist items
     pub fn get_items(&self) -> Vec<PlaylistItem> {
         self.items.read().clone()
+    }
+
+    pub fn get_item_filenames(&self) -> Vec<String> {
+        self.items
+            .read()
+            .iter()
+            .map(|item| item.filename.clone())
+            .collect()
     }
 
     /// Get current index
@@ -56,6 +75,34 @@ impl Playlist {
         index.and_then(|i| items.get(i).cloned())
     }
 
+    pub fn get_current_filename(&self) -> Option<String> {
+        self.get_current_item().map(|item| item.filename)
+    }
+
+    pub fn get_queued_index_filename(&self) -> Option<String> {
+        self.queued_index_filename.read().clone()
+    }
+
+    pub fn set_queued_index_filename(&self, filename: Option<String>) {
+        *self.queued_index_filename.write() = filename;
+    }
+
+    pub fn mark_switch_to_new_item(&self) {
+        *self.switch_to_new_item.write() = true;
+    }
+
+    pub fn opened_file(&self) {
+        *self.last_index_change.write() = Some(Instant::now());
+    }
+
+    pub fn not_just_changed(&self, threshold_seconds: f64) -> bool {
+        let guard = self.last_index_change.read();
+        let Some(last_change) = guard.as_ref() else {
+            return true;
+        };
+        last_change.elapsed().as_secs_f64() > threshold_seconds
+    }
+
     /// Set playlist items (replaces entire playlist)
     pub fn set_items(&self, items: Vec<String>) {
         info!("Setting playlist with {} items", items.len());
@@ -63,11 +110,28 @@ impl Playlist {
 
         *self.items.write() = playlist_items;
 
-        // Reset index if playlist is not empty
         if !self.items.read().is_empty() {
-            *self.current_index.write() = Some(0);
+            let mut current = self.current_index.write();
+            *current = Some(0);
+            *self.last_index_change.write() = Some(Instant::now());
         } else {
             *self.current_index.write() = None;
+        }
+    }
+
+    pub fn set_items_with_index(&self, items: Vec<String>, index: Option<usize>) {
+        let playlist_items: Vec<PlaylistItem> = items.into_iter().map(PlaylistItem::new).collect();
+        *self.items.write() = playlist_items;
+        let len = self.items.read().len();
+        let mut current = self.current_index.write();
+        let next_index = match (len, index) {
+            (0, _) => None,
+            (_, Some(idx)) if idx < len => Some(idx),
+            _ => Some(0),
+        };
+        if *current != next_index {
+            *current = next_index;
+            *self.last_index_change.write() = Some(Instant::now());
         }
     }
 
@@ -80,6 +144,7 @@ impl Playlist {
         // If this is the first item, set it as current
         if items.len() == 1 {
             *self.current_index.write() = Some(0);
+            *self.last_index_change.write() = Some(Instant::now());
         }
     }
 
@@ -114,6 +179,9 @@ impl Playlist {
             }
         }
 
+        if *current != Some(index) {
+            *self.last_index_change.write() = Some(Instant::now());
+        }
         true
     }
 
@@ -130,8 +198,58 @@ impl Playlist {
             "Setting current index to {}: {}",
             index, items[index].filename
         );
-        *self.current_index.write() = Some(index);
+        let mut current = self.current_index.write();
+        if *current != Some(index) {
+            *current = Some(index);
+            *self.last_index_change.write() = Some(Instant::now());
+        }
         true
+    }
+
+    pub fn index_of_filename(&self, filename: &str) -> Option<usize> {
+        self.items
+            .read()
+            .iter()
+            .position(|item| item.filename == filename)
+    }
+
+    pub fn compute_valid_index(&self, new_playlist: &[String]) -> usize {
+        if *self.switch_to_new_item.read() {
+            *self.switch_to_new_item.write() = false;
+            return self.items.read().len();
+        }
+
+        let current_index = *self.current_index.read();
+        if current_index.is_none() || new_playlist.len() <= 1 {
+            return 0;
+        }
+        let current_items = self.get_item_filenames();
+        let start_index = current_index.unwrap_or(0);
+
+        let mut i = start_index;
+        while i <= current_items.len() {
+            if let Some(filename) = current_items.get(i) {
+                if let Some(valid_index) = new_playlist.iter().position(|item| item == filename) {
+                    return valid_index;
+                }
+            }
+            i += 1;
+        }
+
+        let mut i = start_index;
+        while i > 0 {
+            if let Some(filename) = current_items.get(i) {
+                if let Some(valid_index) = new_playlist.iter().position(|item| item == filename) {
+                    if valid_index < new_playlist.len().saturating_sub(1) {
+                        return valid_index + 1;
+                    }
+                    return valid_index;
+                }
+            }
+            i -= 1;
+        }
+
+        0
     }
 
     /// Move to next item
@@ -150,6 +268,7 @@ impl Playlist {
         };
 
         *current = Some(next_index);
+        *self.last_index_change.write() = Some(Instant::now());
         info!("Moving to next item: index {}", next_index);
         items.get(next_index).cloned()
     }
@@ -171,6 +290,7 @@ impl Playlist {
         };
 
         *current = Some(next_index);
+        *self.last_index_change.write() = Some(Instant::now());
         info!("Moving to next item: index {}", next_index);
         items.get(next_index).cloned()
     }
@@ -191,6 +311,7 @@ impl Playlist {
         };
 
         *current = Some(prev_index);
+        *self.last_index_change.write() = Some(Instant::now());
         info!("Moving to previous item: index {}", prev_index);
         items.get(prev_index).cloned()
     }
@@ -200,6 +321,8 @@ impl Playlist {
         info!("Clearing playlist");
         self.items.write().clear();
         *self.current_index.write() = None;
+        *self.last_index_change.write() = Some(Instant::now());
+        *self.queued_index_filename.write() = None;
     }
 
     /// Get playlist size
@@ -240,8 +363,49 @@ impl Playlist {
                 *current = Some(current_idx + 1);
             }
         }
+        *self.last_index_change.write() = Some(Instant::now());
 
         true
+    }
+
+    pub fn update_previous_playlist(&self, new_playlist: &[String], room: &str) {
+        if self.playlist_buffer_is_from_old_room(room) {
+            self.move_playlist_buffer_to_new_room(room);
+            return;
+        }
+        if self.playlist_buffer_needs_updating(new_playlist) {
+            let current_items = self.get_item_filenames();
+            *self.previous_playlist.write() = Some(current_items);
+        }
+    }
+
+    pub fn previous_playlist(&self) -> Option<Vec<String>> {
+        self.previous_playlist.read().clone()
+    }
+
+    pub fn playlist_buffer_is_from_old_room(&self, room: &str) -> bool {
+        self.previous_playlist_room
+            .read()
+            .as_deref()
+            .map(|stored| stored != room)
+            .unwrap_or(true)
+    }
+
+    fn move_playlist_buffer_to_new_room(&self, room: &str) {
+        *self.previous_playlist.write() = None;
+        *self.previous_playlist_room.write() = Some(room.to_string());
+    }
+
+    fn playlist_buffer_needs_updating(&self, new_playlist: &[String]) -> bool {
+        let current_items = self.get_item_filenames();
+        let previous = self.previous_playlist.read();
+        previous.as_ref() != Some(&current_items) && current_items != new_playlist
+    }
+
+    pub fn can_undo(&self) -> bool {
+        let current_items = self.get_item_filenames();
+        let previous = self.previous_playlist.read();
+        previous.is_some() && previous.as_ref() != Some(&current_items)
     }
 }
 
@@ -250,6 +414,11 @@ impl Default for Playlist {
         Self {
             items: RwLock::new(Vec::new()),
             current_index: RwLock::new(None),
+            queued_index_filename: RwLock::new(None),
+            previous_playlist: RwLock::new(None),
+            previous_playlist_room: RwLock::new(None),
+            switch_to_new_item: RwLock::new(false),
+            last_index_change: RwLock::new(None),
         }
     }
 }

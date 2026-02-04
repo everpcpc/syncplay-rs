@@ -8,10 +8,10 @@ repository = "https://github.com/everpcpc/syncplay-tauri"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "2.5.3", features = [] }
+tauri-build = { version = "2.5.4", features = [] }
 
 [dependencies]
-tauri = { version = "2.9.5", features = ["macos-private-api"] }
+tauri = { version = "2.10.1", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-store = "2.4.2"
 serde = { version = "1.0", features = ["derive"] }
@@ -40,9 +40,10 @@ url = "2.5"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }
 urlencoding = "2.1"
 tempfile = "3.8"
+rand = "0.8"
 
 [dev-dependencies]
-tauri = { version = "2.9.5", features = ["test"] }
+tauri = { version = "2.10.1", features = ["test"] }
 
 [features]
 default = ["custom-protocol"]

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { SyncplayConfig } from "../types/config";
 
 // Type definitions matching backend events
@@ -14,6 +15,8 @@ interface User {
   username: string;
   room: string;
   file: string | null;
+  fileSize?: number | string | null;
+  fileDuration?: number | null;
   isReady: boolean;
   isController: boolean;
 }
@@ -48,6 +51,8 @@ interface SyncplayStore {
   player: PlayerState;
   rttMs: number | null;
   config: SyncplayConfig | null;
+  mediaIndexVersion: number;
+  mediaIndexRefreshing: boolean;
 
   // Actions
   setConnectionStatus: (status: ConnectionState) => void;
@@ -58,6 +63,8 @@ interface SyncplayStore {
   setPlayerState: (state: PlayerState) => void;
   setRttMs: (rttMs: number | null) => void;
   setConfig: (config: SyncplayConfig) => void;
+  setMediaIndexVersion: (version: number) => void;
+  setMediaIndexRefreshing: (refreshing: boolean) => void;
 
   // Event listener setup
   setupEventListeners: () => void;
@@ -87,6 +94,8 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
   },
   rttMs: null,
   config: null,
+  mediaIndexVersion: 0,
+  mediaIndexRefreshing: false,
 
   // Actions
   setConnectionStatus: (status) =>
@@ -127,6 +136,16 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
   setConfig: (config) =>
     set(() => ({
       config,
+    })),
+
+  setMediaIndexVersion: (version) =>
+    set(() => ({
+      mediaIndexVersion: version,
+    })),
+
+  setMediaIndexRefreshing: (refreshing) =>
+    set(() => ({
+      mediaIndexRefreshing: refreshing,
     })),
 
   // Setup event listeners from Tauri backend
@@ -196,5 +215,28 @@ export const useSyncplayStore = create<SyncplayStore>((set) => ({
         config: event.payload,
       }));
     });
+
+    listenSafe<{ timestamp: string }>("media-index-updated", (event) => {
+      const parsed = Date.parse(event.payload.timestamp);
+      set(() => ({
+        mediaIndexVersion: Number.isNaN(parsed) ? Date.now() : parsed,
+      }));
+    });
+
+    listenSafe<{ refreshing: boolean }>("media-index-refreshing", (event) => {
+      set(() => ({
+        mediaIndexRefreshing: event.payload.refreshing,
+      }));
+    });
+
+    void invoke<boolean>("get_media_index_refreshing")
+      .then((refreshing) => {
+        set(() => ({
+          mediaIndexRefreshing: refreshing,
+        }));
+      })
+      .catch((error) => {
+        console.error("Failed to read media index status", error);
+      });
   },
 }));

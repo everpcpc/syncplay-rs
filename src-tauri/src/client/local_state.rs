@@ -12,7 +12,7 @@ impl LocalPlaybackState {
         Self {
             position: 0.0,
             paused: true,
-            initialized: true,
+            initialized: false,
         }
     }
 

@@ -34,6 +34,15 @@ pub async fn update_config<R: Runtime>(
 
     *state.config.lock() = config.clone();
     state.sync_engine.lock().update_from_config(&config.user);
+    if state
+        .media_index
+        .update_directories(config.player.media_directories.clone())
+    {
+        state
+            .media_index
+            .clone()
+            .request_refresh(state.inner().clone());
+    }
     {
         let mut autoplay = state.autoplay.lock();
         autoplay.enabled = config.user.autoplay_enabled;
@@ -55,4 +64,18 @@ pub async fn get_config_path<R: Runtime>(app: AppHandle<R>) -> Result<String, St
     crate::config::get_config_path(&app)
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| format!("Failed to get config path: {}", e))
+}
+
+#[tauri::command]
+pub async fn refresh_media_index(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state
+        .media_index
+        .clone()
+        .request_refresh_force(state.inner().clone());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_media_index_refreshing(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    Ok(state.media_index.is_refreshing())
 }

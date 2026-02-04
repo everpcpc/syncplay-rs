@@ -1,6 +1,7 @@
 // Connection command handlers
 
-use crate::app_state::{AppState, ConnectionStatusEvent};
+use crate::app_state::{AppState, ConnectionStatusEvent, ServerFeatures};
+use crate::commands::playlist::apply_playlist_index_from_server;
 use crate::config::{save_config, ServerConfig};
 use crate::network::connection::Connection;
 use crate::network::messages::{
@@ -14,7 +15,9 @@ use crate::player::controller::{
 use crate::player::properties::PlayerState;
 use crate::utils::{
     is_controlled_room, parse_controlled_room_input, same_filename, strip_control_password,
+    truncate_text, version_meets_min,
 };
+use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime, State};
 use tokio::time::{interval, sleep, Duration};
@@ -23,6 +26,17 @@ const AUTOPLAY_DELAY_SECONDS: i32 = 3;
 const DIFFERENT_DURATION_THRESHOLD: f64 = 2.5;
 const WARNING_OSD_INTERVAL_SECONDS: u64 = 1;
 const OSD_MESSAGE_SEPARATOR: &str = "; ";
+const LAST_PAUSED_DIFF_THRESHOLD_SECONDS: f64 = 2.0;
+const CONTROLLED_ROOMS_MIN_VERSION: &str = "1.3.0";
+const USER_READY_MIN_VERSION: &str = "1.3.0";
+const SHARED_PLAYLIST_MIN_VERSION: &str = "1.4.0";
+const CHAT_MIN_VERSION: &str = "1.5.0";
+const FEATURE_LIST_MIN_VERSION: &str = "1.5.0";
+const SET_OTHERS_READINESS_MIN_VERSION: &str = "1.7.2";
+const FALLBACK_MAX_CHAT_MESSAGE_LENGTH: usize = 50;
+const FALLBACK_MAX_USERNAME_LENGTH: usize = 16;
+const FALLBACK_MAX_ROOM_NAME_LENGTH: usize = 35;
+const FALLBACK_MAX_FILENAME_LENGTH: usize = 250;
 
 struct ConnectionSnapshot<'a> {
     host: &'a str,
@@ -30,6 +44,76 @@ struct ConnectionSnapshot<'a> {
     username: &'a str,
     room: &'a str,
     password: Option<&'a str>,
+}
+
+fn update_server_features(
+    state: &Arc<AppState>,
+    server_version: &str,
+    feature_list: Option<Value>,
+) {
+    let mut features = ServerFeatures {
+        feature_list: version_meets_min(server_version, FEATURE_LIST_MIN_VERSION),
+        shared_playlists: version_meets_min(server_version, SHARED_PLAYLIST_MIN_VERSION),
+        chat: version_meets_min(server_version, CHAT_MIN_VERSION),
+        readiness: version_meets_min(server_version, USER_READY_MIN_VERSION),
+        managed_rooms: version_meets_min(server_version, CONTROLLED_ROOMS_MIN_VERSION),
+        persistent_rooms: false,
+        set_others_readiness: version_meets_min(server_version, SET_OTHERS_READINESS_MIN_VERSION),
+        max_chat_message_length: Some(FALLBACK_MAX_CHAT_MESSAGE_LENGTH),
+        max_username_length: Some(FALLBACK_MAX_USERNAME_LENGTH),
+        max_room_name_length: Some(FALLBACK_MAX_ROOM_NAME_LENGTH),
+        max_filename_length: Some(FALLBACK_MAX_FILENAME_LENGTH),
+    };
+
+    if let Some(Value::Object(map)) = feature_list {
+        if let Some(value) = map.get("featureList").and_then(|v| v.as_bool()) {
+            features.feature_list = value;
+        }
+        if let Some(value) = map.get("sharedPlaylists").and_then(|v| v.as_bool()) {
+            features.shared_playlists = value;
+        }
+        if let Some(value) = map.get("chat").and_then(|v| v.as_bool()) {
+            features.chat = value;
+        }
+        if let Some(value) = map.get("readiness").and_then(|v| v.as_bool()) {
+            features.readiness = value;
+        }
+        if let Some(value) = map.get("managedRooms").and_then(|v| v.as_bool()) {
+            features.managed_rooms = value;
+        }
+        if let Some(value) = map.get("persistentRooms").and_then(|v| v.as_bool()) {
+            features.persistent_rooms = value;
+        }
+        if let Some(value) = map.get("setOthersReadiness").and_then(|v| v.as_bool()) {
+            features.set_others_readiness = value;
+        }
+        if let Some(value) = map.get("maxChatMessageLength").and_then(|v| v.as_u64()) {
+            features.max_chat_message_length = Some(value as usize);
+        }
+        if let Some(value) = map.get("maxUsernameLength").and_then(|v| v.as_u64()) {
+            features.max_username_length = Some(value as usize);
+        }
+        if let Some(value) = map.get("maxRoomNameLength").and_then(|v| v.as_u64()) {
+            features.max_room_name_length = Some(value as usize);
+        }
+        if let Some(value) = map.get("maxFilenameLength").and_then(|v| v.as_u64()) {
+            features.max_filename_length = Some(value as usize);
+        }
+    }
+
+    *state.server_features.lock() = features.clone();
+
+    if !version_meets_min(server_version, SHARED_PLAYLIST_MIN_VERSION) {
+        emit_error_message(
+            state,
+            &format!(
+                "Shared playlists require server version {} or later",
+                SHARED_PLAYLIST_MIN_VERSION
+            ),
+        );
+    } else if !features.shared_playlists {
+        emit_error_message(state, "Shared playlists are disabled by the server");
+    }
 }
 
 #[tauri::command]
@@ -60,10 +144,11 @@ pub async fn connect_to_server<R: Runtime>(
     }
 
     let (normalized_room, control_password) = parse_controlled_room_input(&room);
-    let room = normalized_room;
+    let room = truncate_text(&normalized_room, FALLBACK_MAX_ROOM_NAME_LENGTH);
     if let Some(password) = control_password {
         store_control_password(state.inner(), &room, &password, true);
     }
+    let username = truncate_text(&username, FALLBACK_MAX_USERNAME_LENGTH);
 
     // Create new connection
     let connection = Arc::new(Connection::new());
@@ -75,6 +160,18 @@ pub async fn connect_to_server<R: Runtime>(
 
             let config = state.config.lock().clone();
             // Send Hello message
+            let client_features = ClientFeatures {
+                shared_playlists: Some(config.user.shared_playlist_enabled),
+                chat: Some(true),
+                readiness: Some(true),
+                managed_rooms: Some(true),
+                persistent_rooms: Some(true),
+                feature_list: Some(true),
+                set_others_readiness: Some(true),
+                ui_mode: Some("GUI".to_string()),
+            };
+            let features_value = serde_json::to_value(client_features).ok();
+
             let hello_payload = HelloMessage {
                 username: username.clone(),
                 password: password.clone(),
@@ -83,14 +180,8 @@ pub async fn connect_to_server<R: Runtime>(
                     password: None,
                 }),
                 version: "1.2.255".to_string(),
-                realversion: "1.7.4".to_string(),
-                features: Some(ClientFeatures {
-                    shared_playlists: Some(config.user.shared_playlist_enabled),
-                    chat: Some(true),
-                    ready_state: Some(true),
-                    managed_rooms: Some(false),
-                    persistent_rooms: Some(false),
-                }),
+                realversion: "1.7.5".to_string(),
+                features: features_value,
                 motd: None,
             };
 
@@ -131,6 +222,12 @@ pub async fn connect_to_server<R: Runtime>(
             // Update client state
             state.client_state.set_username(username.clone());
             state.client_state.set_room(room.clone());
+            *state.had_first_playlist_index.lock() = false;
+            *state.playlist_may_need_restoring.lock() = false;
+            *state.last_advance_time.lock() = None;
+            *state.last_rewind_time.lock() = None;
+            *state.last_updated_file_time.lock() = None;
+            *state.last_paused_on_leave_time.lock() = None;
             state.sync_engine.lock().update_from_config(&config.user);
             update_autoplay_state(state.inner(), &config);
             maybe_autosave_connection(
@@ -186,7 +283,11 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
     match message {
         ProtocolMessage::Hello { Hello } => {
             tracing::info!("Received hello message: {:?}", Hello);
-            state.client_state.set_server_version(Hello.realversion);
+            state
+                .client_state
+                .set_server_version(Hello.realversion.clone());
+            update_server_features(state, &Hello.realversion, Hello.features.clone());
+            *state.last_connect_time.lock() = Some(std::time::Instant::now());
             emit_system_message(state, &format!("Hello {},", Hello.username));
             if let Some(motd) = Hello.motd {
                 state.emit_event(
@@ -206,6 +307,14 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 }
             }
             reidentify_as_controller(state);
+            if let Some(player) = state.player.lock().clone() {
+                let player_state = player.get_state();
+                if (player_state.filename.is_some() || player_state.path.is_some())
+                    && !crate::player::controller::is_placeholder_file(state, &player_state)
+                {
+                    crate::player::controller::send_file_update(state, &player_state);
+                }
+            }
         }
         ProtocolMessage::List { List } => {
             tracing::info!("Received user list: {:?}", List);
@@ -222,7 +331,7 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                             file,
                             file_size,
                             file_duration,
-                            is_ready: user_info.is_ready.unwrap_or(false),
+                            is_ready: user_info.is_ready,
                             is_controller: user_info.controller.unwrap_or(false),
                         });
                     }
@@ -235,6 +344,9 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
         ProtocolMessage::Chat { Chat } => {
             tracing::info!("Received chat message: {:?}", Chat);
             let config = state.config.lock().clone();
+            if !state.server_features.lock().chat {
+                return;
+            }
             if !config.user.chat_output_enabled {
                 return;
             }
@@ -259,6 +371,7 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
             if let Some(ignore) = state_msg.ignoring_on_the_fly.as_ref() {
                 update_ignoring_on_the_fly(state, ignore);
             }
+            let client_ignore_active = state.ignoring_on_the_fly.lock().client != 0;
             if let Some(ping) = state_msg.ping.as_ref() {
                 if let (Some(client_latency), Some(server_rtt)) =
                     (ping.client_latency_calculation, ping.server_rtt)
@@ -274,7 +387,9 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 *state.last_latency_calculation.lock() = ping.latency_calculation;
             }
             if let Some(playstate) = state_msg.playstate {
-                handle_state_update(state, playstate, message_age).await;
+                if !client_ignore_active {
+                    handle_state_update(state, playstate, message_age).await;
+                }
             }
             let latency_calculation = state_msg
                 .ping
@@ -354,11 +469,17 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     let do_seek = playstate.do_seek.unwrap_or(false);
     let pause_changed =
         playstate.paused != previous_global.paused || playstate.paused != local_paused;
+    let mut made_change_on_player = false;
 
     if do_seek {
         if actor_name != current_username {
             if let Err(e) = player.set_position(adjusted_global_position).await {
                 tracing::warn!("Failed to seek: {}", e);
+            } else {
+                made_change_on_player = true;
+            }
+            if adjusted_global_position < local_position {
+                *state.last_rewind_time.lock() = Some(std::time::Instant::now());
             }
         }
         let message = format!(
@@ -415,6 +536,11 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         if actor_name != current_username {
             if let Err(e) = player.set_position(position).await {
                 tracing::warn!("Failed to seek: {}", e);
+            } else {
+                made_change_on_player = true;
+            }
+            if position < local_position {
+                *state.last_rewind_time.lock() = Some(std::time::Instant::now());
             }
             let message = if position < local_position {
                 format!("Rewinded due to time difference with {}", actor_name)
@@ -430,6 +556,8 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         if actor_name != current_username {
             if let Err(e) = player.set_speed(slowdown_rate).await {
                 tracing::warn!("Failed to set slowdown: {}", e);
+            } else {
+                made_change_on_player = true;
             }
             let message = format!("Slowing down due to time difference with {}", actor_name);
             emit_system_message(state, &message);
@@ -442,6 +570,8 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     if reset_speed {
         if let Err(e) = player.set_speed(1.0).await {
             tracing::warn!("Failed to reset speed: {}", e);
+        } else {
+            made_change_on_player = true;
         }
         let message = "Reverting speed back to normal".to_string();
         emit_system_message(state, &message);
@@ -453,10 +583,14 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
             if actor_name != current_username {
                 if let Err(e) = player.set_position(adjusted_global_position).await {
                     tracing::warn!("Failed to sync position on pause: {}", e);
+                } else {
+                    made_change_on_player = true;
                 }
             }
             if let Err(e) = player.set_paused(true).await {
                 tracing::warn!("Failed to set paused: {}", e);
+            } else {
+                made_change_on_player = true;
             }
             let message = format!(
                 "{} paused at {}",
@@ -466,9 +600,13 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
             emit_system_message(state, &message);
             maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
         } else {
-            *state.suppress_unpause_check.lock() = true;
+            if actor_name != current_username {
+                *state.suppress_unpause_check.lock() = true;
+            }
             if let Err(e) = player.set_paused(false).await {
                 tracing::warn!("Failed to set paused: {}", e);
+            } else {
+                made_change_on_player = true;
             }
             let message = format!("{} unpaused", actor_name);
             emit_system_message(state, &message);
@@ -476,7 +614,22 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         }
     }
 
-    evaluate_autoplay(state);
+    if made_change_on_player {
+        if let Err(e) = player.poll_state().await {
+            tracing::warn!("Failed to refresh player state after update: {}", e);
+        }
+        let refreshed_state = player.get_state();
+        if let (Some(position), Some(paused)) = (refreshed_state.position, refreshed_state.paused) {
+            let global = state.client_state.get_global_state();
+            state.local_playback_state.lock().update_from_player(
+                position,
+                paused,
+                global.position,
+                global.paused,
+            );
+        }
+    }
+
     update_room_warnings(state, false);
 }
 
@@ -574,7 +727,7 @@ pub(crate) fn send_state_message(
     connection.send(message).map_err(|e| e.to_string())
 }
 
-fn emit_system_message(state: &Arc<AppState>, message: &str) {
+pub(crate) fn emit_system_message(state: &Arc<AppState>, message: &str) {
     state.chat.add_system_message(message.to_string());
     state.emit_event(
         "chat-message-received",
@@ -591,16 +744,11 @@ fn should_allow_fastforward(state: &Arc<AppState>, config: &crate::config::Syncp
     if config.user.dont_slow_down_with_me {
         return true;
     }
-    let username = state.client_state.get_username();
-    let can_control = state
-        .client_state
-        .get_user(&username)
-        .map(|user| user.is_controller)
-        .unwrap_or(false);
+    let can_control = current_user_can_control(state);
     !can_control
 }
 
-fn emit_error_message(state: &Arc<AppState>, message: &str) {
+pub(crate) fn emit_error_message(state: &Arc<AppState>, message: &str) {
     state.chat.add_error_message(message.to_string());
     state.emit_event(
         "chat-message-received",
@@ -613,7 +761,7 @@ fn emit_error_message(state: &Arc<AppState>, message: &str) {
     );
 }
 
-fn maybe_show_osd(
+pub(crate) fn maybe_show_osd(
     state: &Arc<AppState>,
     config: &crate::config::SyncplayConfig,
     message: &str,
@@ -652,6 +800,9 @@ fn start_room_warning_loop(state: Arc<AppState>) {
 
 fn update_room_warnings(state: &Arc<AppState>, osd_only: bool) {
     let config = state.config.lock().clone();
+    if autoplay_conditions_met(state) {
+        return;
+    }
     let warnings = compute_room_warning_state(state, &config);
     let mut last = state.room_warning_state.lock();
 
@@ -714,7 +865,7 @@ fn compute_room_warning_state(
         .filter(|user| user.username != current_username)
         .cloned()
         .collect();
-    let alone = others_in_room.is_empty();
+    let alone = others_in_room.is_empty() && !recently_connected(state);
 
     let current_file = state.client_state.get_file();
     let current_size = state.client_state.get_file_size();
@@ -759,14 +910,21 @@ fn compute_room_warning_state(
         Some(diff_parts.join(", "))
     };
 
-    let not_ready = if alone {
+    let not_ready = if alone || !is_readiness_supported(state, true) {
         None
     } else {
-        let not_ready_users: Vec<String> = users_in_room
-            .iter()
-            .filter(|user| !user.is_ready)
-            .map(|user| user.username.clone())
-            .collect();
+        let mut not_ready_users: Vec<String> = Vec::new();
+        if current_user_ready_with_file(state) != Some(true) {
+            not_ready_users.push(current_username.clone());
+        }
+        for user in users_in_room.iter() {
+            if user.username == current_username {
+                continue;
+            }
+            if user.is_ready_with_file() == Some(false) {
+                not_ready_users.push(user.username.clone());
+            }
+        }
         if not_ready_users.is_empty() {
             None
         } else {
@@ -897,16 +1055,23 @@ fn send_controller_auth(state: &Arc<AppState>, room: &str, password: &str) -> Re
         .map_err(|e| format!("Failed to send controller auth: {}", e))
 }
 
-async fn handle_connection_closed(state: &Arc<AppState>) {
+pub(crate) async fn handle_connection_closed(state: &Arc<AppState>) {
     let connection = state.connection.lock().take();
     if connection.is_none() {
         return;
     }
 
     state.client_state.clear_users();
-    state.playlist.clear();
     state.client_state.set_file(None);
     state.client_state.set_ready(false);
+    *state.server_features.lock() = ServerFeatures::default();
+    *state.playlist_may_need_restoring.lock() = true;
+    *state.had_first_playlist_index.lock() = false;
+    *state.last_connect_time.lock() = None;
+    *state.last_rewind_time.lock() = None;
+    *state.last_advance_time.lock() = None;
+    *state.last_updated_file_time.lock() = None;
+    *state.last_paused_on_leave_time.lock() = None;
     {
         let mut autoplay = state.autoplay.lock();
         autoplay.countdown_active = false;
@@ -944,8 +1109,11 @@ async fn handle_connection_closed(state: &Arc<AppState>) {
 }
 
 async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
+    let has_index_update = set_msg.playlist_index.is_some();
     if let Some(room) = set_msg.room {
         state.client_state.set_room(room.name);
+        *state.had_first_playlist_index.lock() = false;
+        *state.playlist_may_need_restoring.lock() = false;
         reidentify_as_controller(state);
     }
 
@@ -954,7 +1122,7 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
             state.client_state.set_file(Some(name.clone()));
             state.client_state.set_file_size(file.size.clone());
             state.client_state.set_file_duration(file.duration);
-            if let Err(e) = load_media_by_name(state, &name, false).await {
+            if let Err(e) = load_media_by_name(state, &name, false, true).await {
                 tracing::warn!("Failed to load file from set: {}", e);
             }
         }
@@ -983,14 +1151,13 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
     }
 
     if let Some(ready) = set_msg.ready {
-        if let Some(username) = ready.username {
+        if let Some(username) = ready.username.clone() {
             let is_ready = match ready.is_ready {
-                Some(value) => value,
+                Some(value) => Some(value),
                 None => state
                     .client_state
                     .get_user(&username)
-                    .map(|user| user.is_ready)
-                    .unwrap_or(false),
+                    .and_then(|user| user.is_ready),
             };
 
             if let Some(mut user) = state.client_state.get_user(&username) {
@@ -1009,8 +1176,20 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
                 });
                 users_changed = true;
             }
-            if ready.is_ready.is_some() && username == state.client_state.get_username() {
-                state.client_state.set_ready(is_ready);
+
+            if let Some(value) = ready.is_ready {
+                if username == state.client_state.get_username() {
+                    state.client_state.set_ready(value);
+                }
+            }
+
+            if let Some(set_by) = ready.set_by {
+                let message = if ready.is_ready.unwrap_or(false) {
+                    format!("{} was set as ready by {}", username, set_by)
+                } else {
+                    format!("{} was set as not ready by {}", username, set_by)
+                };
+                emit_system_message(state, &message);
             }
         } else {
             tracing::debug!("Ready state missing username, ignoring");
@@ -1036,26 +1215,152 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
         }
     }
 
-    let mut playlist_changed = false;
-    if let Some(change) = set_msg.playlist_change {
-        state.playlist.set_items(change.files);
-        playlist_changed = true;
-    }
+    let config = state.config.lock().clone();
+    if shared_playlists_enabled(state, &config) {
+        let mut emit_playlist = false;
+        if let Some(change) = set_msg.playlist_change {
+            let room = state.client_state.get_room();
+            let mut should_restore = false;
+            {
+                let mut may_restore = state.playlist_may_need_restoring.lock();
+                if *may_restore {
+                    *may_restore = false;
+                    if change.files.is_empty()
+                        && change.user.is_none()
+                        && !state.playlist.get_item_filenames().is_empty()
+                        && !state.playlist.playlist_buffer_is_from_old_room(&room)
+                    {
+                        should_restore = true;
+                    }
+                }
+            }
 
-    if let Some(index_update) = set_msg.playlist_index {
-        if let Some(index) = index_update.index {
-            if state.playlist.set_current_index(index) {
-                playlist_changed = true;
+            if should_restore {
+                let items = state.playlist.get_item_filenames();
+                let restore_message = ProtocolMessage::Set {
+                    Set: Box::new(SetMessage {
+                        room: None,
+                        file: None,
+                        user: None,
+                        ready: None,
+                        playlist_index: None,
+                        playlist_change: Some(crate::network::messages::PlaylistChange {
+                            user: None,
+                            files: items.clone(),
+                        }),
+                        controller_auth: None,
+                        new_controlled_room: None,
+                        features: None,
+                    }),
+                };
+                if let Some(connection) = state.connection.lock().clone() {
+                    if let Err(e) = connection.send(restore_message) {
+                        tracing::warn!("Failed to restore playlist: {}", e);
+                    }
+                    if let Some(index) = state.playlist.get_current_index() {
+                        let index_message = ProtocolMessage::Set {
+                            Set: Box::new(SetMessage {
+                                room: None,
+                                file: None,
+                                user: None,
+                                ready: None,
+                                playlist_index: Some(
+                                    crate::network::messages::PlaylistIndexUpdate {
+                                        user: None,
+                                        index: Some(index),
+                                    },
+                                ),
+                                playlist_change: None,
+                                controller_auth: None,
+                                new_controlled_room: None,
+                                features: None,
+                            }),
+                        };
+                        if let Err(e) = connection.send(index_message) {
+                            tracing::warn!("Failed to restore playlist index: {}", e);
+                        }
+                    }
+                }
+            } else {
+                state
+                    .playlist
+                    .update_previous_playlist(&change.files, &room);
+                let current_index = state.playlist.get_current_index();
+                let next_index = match current_index {
+                    Some(index) if index < change.files.len() => Some(index),
+                    _ if change.files.is_empty() => None,
+                    _ => Some(0),
+                };
+                state
+                    .playlist
+                    .set_items_with_index(change.files, next_index);
+                emit_playlist = true;
+                if let Some(user) = change.user {
+                    let message = format!("{} updated the playlist", user);
+                    emit_system_message(state, &message);
+                    maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+                }
+                if !has_index_update && state.client_state.get_file().is_none() {
+                    if let Some(index) = state.playlist.get_current_index() {
+                        if let Err(e) = apply_playlist_index_from_server(state, index, false).await
+                        {
+                            tracing::warn!("Failed to load playlist after sync: {}", e);
+                        }
+                    }
+                }
             }
         }
-    }
 
-    if playlist_changed {
-        emit_playlist_update(state);
-        if let Some(item) = state.playlist.get_current_item() {
-            if let Err(e) = load_media_by_name(state, &item.filename, false).await {
-                tracing::warn!("Failed to load playlist item: {}", e);
+        if let Some(index_update) = set_msg.playlist_index {
+            if let Some(index) = index_update.index {
+                let reset_position = {
+                    let mut had_first = state.had_first_playlist_index.lock();
+                    if !*had_first {
+                        *had_first = true;
+                        false
+                    } else {
+                        true
+                    }
+                };
+                let mut skipped_load = false;
+                let user = index_update.user.clone();
+                if let Some(user) = user.as_ref() {
+                    let current_user = state.client_state.get_username();
+                    if user == &current_user {
+                        let items = state.playlist.get_item_filenames();
+                        if let Some(filename) = items.get(index) {
+                            if same_filename(
+                                state.client_state.get_file().as_deref(),
+                                Some(filename),
+                            ) {
+                                state.playlist.set_current_index(index);
+                                state
+                                    .playlist
+                                    .set_queued_index_filename(Some(filename.clone()));
+                                emit_playlist_update(state);
+                                skipped_load = true;
+                            }
+                        }
+                    }
+                }
+                if !skipped_load {
+                    if let Err(e) =
+                        apply_playlist_index_from_server(state, index, reset_position).await
+                    {
+                        tracing::warn!("Failed to apply playlist index: {}", e);
+                    }
+                }
+                if let Some(user) = user {
+                    let message = format!("{} changed the playlist selection", user);
+                    emit_system_message(state, &message);
+                    maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+                }
+                emit_playlist = false;
             }
+        }
+
+        if emit_playlist {
+            emit_playlist_update(state);
         }
     }
 
@@ -1168,7 +1473,7 @@ fn set_user_controller_status(
             file: None,
             file_size: None,
             file_duration: None,
-            is_ready: false,
+            is_ready: None,
             is_controller: false,
         });
     if let Some(room) = room {
@@ -1239,10 +1544,8 @@ fn send_hello(state: &Arc<AppState>) {
     tracing::info!("Sent Hello message");
 
     let config = state.config.lock().clone();
-    if config.user.ready_at_start {
-        if let Err(e) = send_ready_state(state, true, false) {
-            tracing::warn!("Failed to send ready-at-start: {}", e);
-        }
+    if let Err(e) = send_ready_state(state, config.user.ready_at_start, false) {
+        tracing::warn!("Failed to send ready-at-start: {}", e);
     }
 }
 
@@ -1299,11 +1602,167 @@ fn maybe_autosave_connection<R: Runtime>(
     state.emit_event("config-updated", updated);
 }
 
+fn current_user_can_control(state: &Arc<AppState>) -> bool {
+    let room = state.client_state.get_room();
+    if !is_controlled_room(&room) {
+        return true;
+    }
+    let username = state.client_state.get_username();
+    state
+        .client_state
+        .get_user(&username)
+        .map(|user| user.is_controller)
+        .unwrap_or(false)
+}
+
+fn current_user_ready_with_file(state: &Arc<AppState>) -> Option<bool> {
+    state.client_state.get_file()?;
+    Some(state.client_state.is_ready())
+}
+
+fn is_readiness_supported(state: &Arc<AppState>, requires_other_users: bool) -> bool {
+    let features = state.server_features.lock();
+    if !features.readiness {
+        return false;
+    }
+    if !requires_other_users {
+        return true;
+    }
+    let room = state.client_state.get_room();
+    let username = state.client_state.get_username();
+    let others_support = state
+        .client_state
+        .get_users_in_room(&room)
+        .iter()
+        .any(|user| user.username != username && user.is_ready_with_file().is_some());
+    if !others_support {
+        return false;
+    }
+    true
+}
+
+fn are_all_users_in_room_ready(state: &Arc<AppState>, require_same_filenames: bool) -> bool {
+    let current_ready = current_user_ready_with_file(state);
+    if current_ready != Some(true) {
+        return false;
+    }
+    let current_file = state.client_state.get_file();
+    if require_same_filenames && current_file.is_none() {
+        return false;
+    }
+    let room = state.client_state.get_room();
+    let username = state.client_state.get_username();
+    for user in state.client_state.get_users_in_room(&room) {
+        if user.username == username {
+            continue;
+        }
+        if user.is_ready_with_file() == Some(false) {
+            return false;
+        }
+        if require_same_filenames {
+            let Some(current_file) = current_file.as_ref() else {
+                return false;
+            };
+            let Some(other_file) = user.file.as_ref() else {
+                return false;
+            };
+            if !same_filename(Some(current_file), Some(other_file)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn are_all_other_users_ready(state: &Arc<AppState>) -> bool {
+    let room = state.client_state.get_room();
+    let username = state.client_state.get_username();
+    for user in state.client_state.get_users_in_room(&room) {
+        if user.username == username {
+            continue;
+        }
+        if user.is_ready_with_file() == Some(false) {
+            return false;
+        }
+    }
+    true
+}
+
+fn users_in_room_count(state: &Arc<AppState>) -> usize {
+    let room = state.client_state.get_room();
+    let username = state.client_state.get_username();
+    let mut count = 1;
+    for user in state.client_state.get_users_in_room(&room) {
+        if user.username == username {
+            continue;
+        }
+        if user.is_ready_with_file() == Some(true) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn shared_playlists_enabled(state: &Arc<AppState>, config: &crate::config::SyncplayConfig) -> bool {
+    config.user.shared_playlist_enabled && state.server_features.lock().shared_playlists
+}
+
+fn recently_connected(state: &Arc<AppState>) -> bool {
+    let guard = state.last_connect_time.lock();
+    let Some(last_connect) = guard.as_ref() else {
+        return true;
+    };
+    last_connect.elapsed().as_secs_f64() < LAST_PAUSED_DIFF_THRESHOLD_SECONDS
+}
+
+fn recently_advanced(state: &Arc<AppState>) -> bool {
+    let guard = state.last_advance_time.lock();
+    let Some(last_advance) = guard.as_ref() else {
+        return false;
+    };
+    last_advance.elapsed().as_secs_f64() < (AUTOPLAY_DELAY_SECONDS as f64 + 5.0)
+}
+
+fn is_playing_music(state: &Arc<AppState>) -> bool {
+    state
+        .client_state
+        .get_file()
+        .as_deref()
+        .map(crate::utils::is_music_file)
+        .unwrap_or(false)
+}
+
+fn seamless_music_override(state: &Arc<AppState>) -> bool {
+    is_playing_music(state) && recently_advanced(state)
+}
+
+fn maybe_unpause_for_music(state: &Arc<AppState>) {
+    if !seamless_music_override(state) {
+        return;
+    }
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = ensure_player_connected(&state_clone).await {
+            tracing::warn!("Failed to connect player for music override: {}", e);
+            return;
+        }
+        let player = state_clone.player.lock().clone();
+        if let Some(player) = player {
+            if let Err(e) = player.set_paused(false).await {
+                tracing::warn!("Failed to unpause during music override: {}", e);
+            }
+        }
+    });
+}
+
 fn send_ready_state(
     state: &Arc<AppState>,
     is_ready: bool,
     manually_initiated: bool,
 ) -> Result<(), String> {
+    if !is_readiness_supported(state, false) {
+        return Ok(());
+    }
     state.client_state.set_ready(is_ready);
     let username = state.client_state.get_username();
     let message = ProtocolMessage::Set {
@@ -1335,31 +1794,31 @@ fn send_ready_state(
 
 fn autoplay_conditions_met(state: &Arc<AppState>) -> bool {
     let config = state.config.lock().clone();
-    if !config.user.autoplay_enabled {
+    maybe_unpause_for_music(state);
+    if is_playing_music(state) {
+        return false;
+    }
+    let autoplay_enabled = config.user.autoplay_enabled;
+    let recently_advanced = recently_advanced(state);
+    if !autoplay_enabled && !recently_advanced {
         return false;
     }
 
-    let room = state.client_state.get_room();
-    let users = state.client_state.get_users_in_room(&room);
-    if users.is_empty() {
+    if !current_user_can_control(state) {
+        return false;
+    }
+    if !is_readiness_supported(state, true) {
+        return false;
+    }
+    if !are_all_users_in_room_ready(state, config.user.autoplay_require_same_filenames) {
         return false;
     }
 
-    let current_file = state.client_state.get_file();
-    for user in &users {
-        if !user.is_ready {
+    if config.user.autoplay_min_users > 0 {
+        let count = users_in_room_count(state) as i32;
+        if count < config.user.autoplay_min_users && !recently_advanced {
             return false;
         }
-        if config.user.autoplay_require_same_filenames
-            && !same_filename(current_file.as_deref(), user.file.as_deref())
-        {
-            return false;
-        }
-    }
-
-    if config.user.autoplay_min_users >= 2 && (users.len() as i32) < config.user.autoplay_min_users
-    {
-        return false;
     }
 
     let player_state = state.player.lock().clone().map(|player| player.get_state());
@@ -1404,6 +1863,18 @@ fn start_autoplay_countdown(state: Arc<AppState>) {
                 }
             }
 
+            if !should_unpause {
+                let remaining = state.autoplay.lock().countdown_remaining;
+                let ready_count = ready_user_count(&state);
+                let message = format!(
+                    "All users ready ({}) - autoplaying in {}s",
+                    ready_count, remaining
+                );
+                if let Some(player) = state.player.lock().clone() {
+                    let _ = player.show_osd(&message, Some(1000));
+                }
+            }
+
             if should_unpause {
                 if let Err(e) = ensure_player_connected(&state).await {
                     tracing::warn!("Failed to connect to player for autoplay: {}", e);
@@ -1427,7 +1898,7 @@ fn start_autoplay_countdown(state: Arc<AppState>) {
     });
 }
 
-fn evaluate_autoplay(state: &Arc<AppState>) {
+pub(crate) fn evaluate_autoplay(state: &Arc<AppState>) {
     if autoplay_conditions_met(state) {
         start_autoplay_countdown(state.clone());
     } else {
@@ -1435,6 +1906,20 @@ fn evaluate_autoplay(state: &Arc<AppState>) {
         autoplay.countdown_active = false;
         autoplay.countdown_remaining = 0;
     }
+}
+
+fn ready_user_count(state: &Arc<AppState>) -> usize {
+    let room = state.client_state.get_room();
+    let mut count = 0usize;
+    if state.client_state.get_file().is_some() && state.client_state.is_ready() {
+        count += 1;
+    }
+    for user in state.client_state.get_users_in_room(&room) {
+        if user.is_ready_with_file() == Some(true) {
+            count += 1;
+        }
+    }
+    count
 }
 
 async fn pause_local_player(state: &Arc<AppState>) {
@@ -1447,6 +1932,7 @@ async fn pause_local_player(state: &Arc<AppState>) {
         if let Err(e) = player.set_paused(true).await {
             tracing::warn!("Failed to pause player: {}", e);
         }
+        *state.last_paused_on_leave_time.lock() = Some(std::time::Instant::now());
     }
 }
 
@@ -1482,7 +1968,7 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
             file: None,
             file_size: None,
             file_duration: None,
-            is_ready: false,
+            is_ready: None,
             is_controller: false,
         });
 
@@ -1498,7 +1984,7 @@ fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate
         updated_file = Some(());
     }
     if let Some(is_ready) = update.is_ready {
-        user.is_ready = is_ready;
+        user.is_ready = Some(is_ready);
     }
     if let Some(controller) = update.controller {
         user.is_controller = controller;
@@ -1649,7 +2135,9 @@ fn emit_user_list(state: &Arc<AppState>) {
                 "username": u.username,
                 "room": u.room,
                 "file": u.file,
-                "isReady": u.is_ready,
+                "fileSize": u.file_size,
+                "fileDuration": u.file_duration,
+                "isReady": u.is_ready.unwrap_or(false),
                 "isController": u.is_controller,
             })
         })
@@ -1693,6 +2181,14 @@ pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(
     state.playlist.clear();
     state.client_state.set_file(None);
     state.client_state.set_ready(false);
+    *state.server_features.lock() = ServerFeatures::default();
+    *state.playlist_may_need_restoring.lock() = false;
+    *state.had_first_playlist_index.lock() = false;
+    *state.last_connect_time.lock() = None;
+    *state.last_rewind_time.lock() = None;
+    *state.last_advance_time.lock() = None;
+    *state.last_updated_file_time.lock() = None;
+    *state.last_paused_on_leave_time.lock() = None;
     {
         let mut autoplay = state.autoplay.lock();
         autoplay.countdown_active = false;

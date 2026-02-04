@@ -7,8 +7,8 @@ use tauri::{AppHandle, Emitter};
 use tempfile::TempDir;
 
 use crate::client::{
-    chat::ChatManager, local_state::LocalPlaybackState, playlist::Playlist, state::ClientState,
-    sync::SyncEngine,
+    chat::ChatManager, local_state::LocalPlaybackState, media_index::MediaIndex,
+    playlist::Playlist, state::ClientState, sync::SyncEngine,
 };
 use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::connection::Connection;
@@ -52,10 +52,26 @@ pub struct AppState {
     pub last_latency_calculation: Arc<Mutex<Option<f64>>>,
     /// Last time a global playstate was received
     pub last_global_update: Arc<Mutex<Option<Instant>>>,
+    /// Last time we established a connection
+    pub last_connect_time: Arc<Mutex<Option<Instant>>>,
     /// Latest local playback state
     pub local_playback_state: Arc<Mutex<LocalPlaybackState>>,
     /// Ignoring-on-the-fly counters
     pub ignoring_on_the_fly: Arc<Mutex<IgnoringOnTheFlyState>>,
+    /// Server feature support
+    pub server_features: Arc<Mutex<ServerFeatures>>,
+    /// Last rewind timestamp
+    pub last_rewind_time: Arc<Mutex<Option<Instant>>>,
+    /// Last playlist advance timestamp
+    pub last_advance_time: Arc<Mutex<Option<Instant>>>,
+    /// Last time a file update was sent/received
+    pub last_updated_file_time: Arc<Mutex<Option<Instant>>>,
+    /// Last time we paused due to a user leaving
+    pub last_paused_on_leave_time: Arc<Mutex<Option<Instant>>>,
+    /// Whether we should restore playlist on reconnect
+    pub playlist_may_need_restoring: Arc<Mutex<bool>>,
+    /// Whether the first playlist index has been received
+    pub had_first_playlist_index: Arc<Mutex<bool>>,
     /// Last time a player process was spawned
     pub last_player_spawn: Arc<Mutex<Option<Instant>>>,
     /// Kind of the last spawned player
@@ -78,6 +94,8 @@ pub struct AppState {
     pub room_warning_state: Arc<Mutex<RoomWarningState>>,
     /// Whether the room warning task is running
     pub room_warning_task_running: Arc<Mutex<bool>>,
+    /// Media index cache
+    pub media_index: Arc<MediaIndex>,
 }
 
 #[derive(Debug, Default)]
@@ -106,8 +124,16 @@ impl AppState {
             ping_service: Arc::new(Mutex::new(PingService::default())),
             last_latency_calculation: Arc::new(Mutex::new(None)),
             last_global_update: Arc::new(Mutex::new(None)),
+            last_connect_time: Arc::new(Mutex::new(None)),
             local_playback_state: Arc::new(Mutex::new(LocalPlaybackState::new())),
             ignoring_on_the_fly: Arc::new(Mutex::new(IgnoringOnTheFlyState::default())),
+            server_features: Arc::new(Mutex::new(ServerFeatures::default())),
+            last_rewind_time: Arc::new(Mutex::new(None)),
+            last_advance_time: Arc::new(Mutex::new(None)),
+            last_updated_file_time: Arc::new(Mutex::new(None)),
+            last_paused_on_leave_time: Arc::new(Mutex::new(None)),
+            playlist_may_need_restoring: Arc::new(Mutex::new(false)),
+            had_first_playlist_index: Arc::new(Mutex::new(false)),
             last_player_spawn: Arc::new(Mutex::new(None)),
             last_player_kind: Arc::new(Mutex::new(None)),
             mpv_runtime_dir: Arc::new(Mutex::new(None)),
@@ -119,6 +145,7 @@ impl AppState {
             last_control_password_attempt: Arc::new(Mutex::new(None)),
             room_warning_state: Arc::new(Mutex::new(RoomWarningState::default())),
             room_warning_task_running: Arc::new(Mutex::new(false)),
+            media_index: MediaIndex::new(),
         })
     }
 
@@ -171,8 +198,16 @@ impl Default for AppState {
             ping_service: Arc::new(Mutex::new(PingService::default())),
             last_latency_calculation: Arc::new(Mutex::new(None)),
             last_global_update: Arc::new(Mutex::new(None)),
+            last_connect_time: Arc::new(Mutex::new(None)),
             local_playback_state: Arc::new(Mutex::new(LocalPlaybackState::new())),
             ignoring_on_the_fly: Arc::new(Mutex::new(IgnoringOnTheFlyState::default())),
+            server_features: Arc::new(Mutex::new(ServerFeatures::default())),
+            last_rewind_time: Arc::new(Mutex::new(None)),
+            last_advance_time: Arc::new(Mutex::new(None)),
+            last_updated_file_time: Arc::new(Mutex::new(None)),
+            last_paused_on_leave_time: Arc::new(Mutex::new(None)),
+            playlist_may_need_restoring: Arc::new(Mutex::new(false)),
+            had_first_playlist_index: Arc::new(Mutex::new(false)),
             last_player_spawn: Arc::new(Mutex::new(None)),
             last_player_kind: Arc::new(Mutex::new(None)),
             mpv_runtime_dir: Arc::new(Mutex::new(None)),
@@ -184,6 +219,7 @@ impl Default for AppState {
             last_control_password_attempt: Arc::new(Mutex::new(None)),
             room_warning_state: Arc::new(Mutex::new(RoomWarningState::default())),
             room_warning_task_running: Arc::new(Mutex::new(false)),
+            media_index: MediaIndex::new(),
         }
     }
 }
@@ -196,6 +232,21 @@ pub struct AutoPlayState {
     pub unpause_action: UnpauseAction,
     pub countdown_active: bool,
     pub countdown_remaining: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerFeatures {
+    pub feature_list: bool,
+    pub shared_playlists: bool,
+    pub chat: bool,
+    pub readiness: bool,
+    pub managed_rooms: bool,
+    pub persistent_rooms: bool,
+    pub set_others_readiness: bool,
+    pub max_chat_message_length: Option<usize>,
+    pub max_username_length: Option<usize>,
+    pub max_room_name_length: Option<usize>,
+    pub max_filename_length: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -214,6 +265,24 @@ impl Default for AutoPlayState {
             unpause_action: UnpauseAction::IfOthersReady,
             countdown_active: false,
             countdown_remaining: 0,
+        }
+    }
+}
+
+impl Default for ServerFeatures {
+    fn default() -> Self {
+        Self {
+            feature_list: false,
+            shared_playlists: true,
+            chat: true,
+            readiness: true,
+            managed_rooms: true,
+            persistent_rooms: false,
+            set_others_readiness: false,
+            max_chat_message_length: Some(50),
+            max_username_length: Some(16),
+            max_room_name_length: Some(35),
+            max_filename_length: Some(250),
         }
     }
 }

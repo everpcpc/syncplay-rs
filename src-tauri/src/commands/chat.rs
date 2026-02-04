@@ -25,8 +25,15 @@ pub async fn send_chat_message(
     if !config.user.chat_input_enabled {
         return Err("Chat input is disabled".to_string());
     }
+    if !state.server_features.lock().chat {
+        return Err("Chat is disabled by the server".to_string());
+    }
 
-    let max_length = 150usize;
+    let max_length = state
+        .server_features
+        .lock()
+        .max_chat_message_length
+        .unwrap_or(150);
     let message = truncate_text(trimmed, max_length);
     tracing::info!("Sending chat message: {}", message);
 
@@ -40,7 +47,14 @@ pub async fn send_chat_message(
         match command {
             ChatCommand::Room(room) => {
                 tracing::info!("Command: Change room to {}", room);
-                let (normalized_room, control_password) = parse_controlled_room_input(&room);
+                let max_len = state
+                    .server_features
+                    .lock()
+                    .max_room_name_length
+                    .unwrap_or(35);
+                let trimmed_room = truncate_text(&room, max_len);
+                let (normalized_room, control_password) =
+                    parse_controlled_room_input(&trimmed_room);
                 let room = normalized_room;
                 if let Some(password) = control_password {
                     store_control_password(state.inner(), &room, &password, true);
@@ -101,6 +115,9 @@ pub async fn send_chat_message(
             }
             ChatCommand::Ready => {
                 tracing::info!("Command: Set ready");
+                if !state.server_features.lock().readiness {
+                    return Err("Ready state is not supported by the server".to_string());
+                }
                 state.client_state.set_ready(true);
                 let username = state.client_state.get_username();
                 let set_msg = ProtocolMessage::Set {
@@ -125,8 +142,61 @@ pub async fn send_chat_message(
             }
             ChatCommand::Unready => {
                 tracing::info!("Command: Set unready");
+                if !state.server_features.lock().readiness {
+                    return Err("Ready state is not supported by the server".to_string());
+                }
                 state.client_state.set_ready(false);
                 let username = state.client_state.get_username();
+                let set_msg = ProtocolMessage::Set {
+                    Set: Box::new(SetMessage {
+                        room: None,
+                        file: None,
+                        user: None,
+                        ready: Some(ReadyState {
+                            username: Some(username),
+                            is_ready: Some(false),
+                            manually_initiated: Some(true),
+                            set_by: None,
+                        }),
+                        playlist_index: None,
+                        playlist_change: None,
+                        controller_auth: None,
+                        new_controlled_room: None,
+                        features: None,
+                    }),
+                };
+                send_to_server(&state, set_msg)?;
+            }
+            ChatCommand::SetReady(username) => {
+                tracing::info!("Command: Set other user ready");
+                if !state.server_features.lock().set_others_readiness {
+                    return Err("Readiness override is not supported by the server".to_string());
+                }
+                let set_msg = ProtocolMessage::Set {
+                    Set: Box::new(SetMessage {
+                        room: None,
+                        file: None,
+                        user: None,
+                        ready: Some(ReadyState {
+                            username: Some(username),
+                            is_ready: Some(true),
+                            manually_initiated: Some(true),
+                            set_by: None,
+                        }),
+                        playlist_index: None,
+                        playlist_change: None,
+                        controller_auth: None,
+                        new_controlled_room: None,
+                        features: None,
+                    }),
+                };
+                send_to_server(&state, set_msg)?;
+            }
+            ChatCommand::SetNotReady(username) => {
+                tracing::info!("Command: Set other user not ready");
+                if !state.server_features.lock().set_others_readiness {
+                    return Err("Readiness override is not supported by the server".to_string());
+                }
                 let set_msg = ProtocolMessage::Set {
                     Set: Box::new(SetMessage {
                         room: None,

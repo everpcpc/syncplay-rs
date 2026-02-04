@@ -20,8 +20,13 @@ pub async fn change_room<R: Runtime>(
     if !state.is_connected() {
         return Err("Not connected to server".to_string());
     }
-
-    let (normalized_room, control_password) = parse_controlled_room_input(&room);
+    let max_len = state
+        .server_features
+        .lock()
+        .max_room_name_length
+        .unwrap_or(35);
+    let trimmed_room = crate::utils::truncate_text(&room, max_len);
+    let (normalized_room, control_password) = parse_controlled_room_input(&trimmed_room);
     let room = normalized_room;
     if let Some(password) = control_password {
         store_control_password(state.inner(), &room, &password, true);
@@ -29,6 +34,8 @@ pub async fn change_room<R: Runtime>(
 
     // Update client state
     state.client_state.set_room(room.clone());
+    *state.had_first_playlist_index.lock() = false;
+    *state.playlist_may_need_restoring.lock() = false;
 
     let message = ProtocolMessage::Set {
         Set: Box::new(SetMessage {

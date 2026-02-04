@@ -122,7 +122,7 @@ pub struct HelloMessage {
     pub version: String,
     pub realversion: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub features: Option<ClientFeatures>,
+    pub features: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motd: Option<String>,
 }
@@ -141,12 +141,22 @@ pub struct ClientFeatures {
     pub shared_playlists: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ready_state: Option<bool>,
+    #[serde(
+        rename = "readiness",
+        alias = "readyState",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub readiness: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_rooms: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persistent_rooms: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_list: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set_others_readiness: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_mode: Option<String>,
 }
 
 /// Set message - update settings
