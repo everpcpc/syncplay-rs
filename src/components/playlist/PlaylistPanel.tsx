@@ -17,9 +17,15 @@ import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { SyncplayConfig } from "../../types/config";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { MediaDirectoriesDialog } from "./MediaDirectoriesDialog";
 import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
+
+interface PlaylistItemStatus {
+  filename: string;
+  path: string | null;
+  available: boolean;
+}
 
 export function PlaylistPanel() {
   const playlist = useSyncplayStore((state) => state.playlist);
@@ -32,7 +38,7 @@ export function PlaylistPanel() {
   const addNotification = useNotificationStore((state) => state.addNotification);
   const [showMediaDirectories, setShowMediaDirectories] = useState(false);
   const [showTrustedDomains, setShowTrustedDomains] = useState(false);
-  const [availability, setAvailability] = useState<boolean[]>([]);
+  const [availability, setAvailability] = useState<PlaylistItemStatus[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +50,7 @@ export function PlaylistPanel() {
     }
     const checkAvailability = async () => {
       try {
-        const result = await invoke<boolean[]>("check_playlist_items", {
+        const result = await invoke<PlaylistItemStatus[]>("check_playlist_items", {
           items: playlist.items,
         });
         if (!cancelled) {
@@ -52,7 +58,13 @@ export function PlaylistPanel() {
         }
       } catch (error) {
         if (!cancelled) {
-          setAvailability(playlist.items.map(() => true));
+          setAvailability(
+            playlist.items.map((item) => ({
+              filename: item,
+              path: null,
+              available: false,
+            }))
+          );
         }
       }
     };
@@ -75,6 +87,13 @@ export function PlaylistPanel() {
   const formatSpeed = (speed: number | null) => {
     if (speed === null || speed === 1.0) return "";
     return `${speed.toFixed(2)}x`;
+  };
+
+  const formatLastScan = (timestamp: number) => {
+    if (!timestamp) return "Never";
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return "Never";
+    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   };
 
   const updateUserSetting = async <K extends keyof SyncplayConfig["user"]>(
@@ -167,17 +186,72 @@ export function PlaylistPanel() {
     }
   };
 
-  const handleRefreshMediaIndex = async () => {
+  const handleDropFiles = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!connection.connected) return;
+
+    const files = Array.from(event.dataTransfer.files);
+    const paths = files
+      .map((file) => (file as { path?: string }).path)
+      .filter((path): path is string => Boolean(path));
+    if (paths.length === 0) return;
+
+    let baseConfig: SyncplayConfig | null = config;
+    if (!baseConfig) {
+      try {
+        baseConfig = await invoke<SyncplayConfig>("get_config");
+      } catch (error) {
+        addNotification({
+          type: "error",
+          message: "Failed to load config for dropped files",
+        });
+        return;
+      }
+    }
+
+    const mediaDirectories = baseConfig.player.media_directories.filter((dir) => dir.trim() !== "");
+    const normalizedDirs = mediaDirectories.map(normalizePath);
+    const rejected: string[] = [];
+
+    for (const path of paths) {
+      const normalizedFile = normalizePath(path);
+      const isInDirectory =
+        normalizedDirs.length > 0 &&
+        normalizedDirs.some((dir) => normalizedFile.startsWith(`${dir}/`));
+      const filename = isInDirectory ? path.split(/[/\\\\]/).pop() || path : path;
+      try {
+        await invoke("update_playlist", {
+          action: "add",
+          filename,
+        });
+      } catch (error) {
+        rejected.push(path);
+      }
+    }
+
+    if (rejected.length > 0) {
+      addNotification({
+        type: "warning",
+        message: `Skipped ${rejected.length} file(s) that could not be added`,
+      });
+    }
+  };
+
+  const handleScanMediaDirectory = async () => {
     if (mediaIndexRefreshing) return;
     try {
       await invoke("refresh_media_index");
     } catch (error) {
       addNotification({
         type: "error",
-        message: "Failed to refresh media index",
+        message: "Failed to scan media directory",
       });
     }
   };
+
+  const scanLabel = mediaIndexRefreshing ? "Scanning media directory" : "Scan media directory";
+  const scanTooltip = `${scanLabel} (Last scan: ${formatLastScan(mediaIndexVersion)})`;
 
   const handleRemoveItem = async (index: number) => {
     try {
@@ -269,10 +343,10 @@ export function PlaylistPanel() {
                 <LuShield className="app-icon" />
               </button>
               <button
-                onClick={handleRefreshMediaIndex}
+                onClick={handleScanMediaDirectory}
                 disabled={mediaIndexRefreshing}
                 className="btn-neutral app-icon-button disabled:opacity-60 disabled:cursor-not-allowed app-tooltip-right"
-                aria-label={mediaIndexRefreshing ? "Refreshing media index" : "Refresh media index"}
+                aria-label={scanTooltip}
               >
                 <LuRefreshCw className="app-icon" />
               </button>
@@ -308,14 +382,24 @@ export function PlaylistPanel() {
       </div>
 
       {/* Playlist items */}
-      <div className="flex-1 overflow-auto p-4">
+      <div
+        className="flex-1 overflow-auto p-4"
+        onDragOver={(event) => {
+          event.preventDefault();
+        }}
+        onDrop={(event) => {
+          void handleDropFiles(event);
+        }}
+      >
         {playlist.items.length === 0 ? (
           <p className="app-text-muted text-sm">No items in playlist</p>
         ) : (
           <div className="space-y-2">
             {playlist.items.map((item, index) =>
               (() => {
-                const available = availability[index] ?? true;
+                const itemStatus = availability[index];
+                const available = itemStatus?.available ?? true;
+                const resolvedPath = itemStatus?.path ?? null;
                 return (
                   <div
                     key={index}
@@ -328,7 +412,10 @@ export function PlaylistPanel() {
                       index === playlist.currentIndex ? "app-item-active" : "app-panel-muted"
                     }`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div
+                      className="relative flex items-center gap-2 app-tooltip"
+                      aria-label={resolvedPath ?? "Unresolved path"}
+                    >
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
@@ -336,7 +423,7 @@ export function PlaylistPanel() {
                         }}
                         disabled={!connection.connected || !available}
                         aria-label="Play"
-                        className="app-icon-button app-text-muted hover:app-text-accent opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto disabled:opacity-40 app-tooltip-side-right"
+                        className="btn-neutral app-icon-button playlist-overlay-button app-text-muted hover:app-text-accent invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto disabled:opacity-40 app-tooltip-side-right !absolute left-0 top-1/2 z-10"
                       >
                         <LuPlay className="app-icon" />
                       </button>
@@ -345,7 +432,7 @@ export function PlaylistPanel() {
                       </span>
                       {!available && (
                         <span className="text-[10px] px-2 py-1 rounded-full app-chip-muted app-text-danger">
-                          Missing
+                          Unavailable
                         </span>
                       )}
                       <button
@@ -355,7 +442,7 @@ export function PlaylistPanel() {
                         }}
                         disabled={!connection.connected}
                         aria-label="Remove"
-                        className="app-icon-button app-text-danger hover:opacity-80 disabled:opacity-60 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto app-tooltip-side-left"
+                        className="btn-neutral app-icon-button playlist-overlay-button app-text-danger hover:opacity-80 disabled:opacity-60 invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto app-tooltip-side-left !absolute right-0 top-1/2 z-10"
                       >
                         <LuTrash2 className="app-icon" />
                       </button>

@@ -409,6 +409,16 @@
   overflow: visible;
 }
 
+.playlist-overlay-button {
+  transform: translateY(-50%);
+  background-color: var(--app-panel-glass) !important;
+  border-color: var(--app-border) !important;
+}
+
+.playlist-overlay-button.btn-neutral:hover {
+  transform: translateY(calc(-50% - 1px));
+}
+
 .app-tooltip {
   position: relative;
   overflow: visible;

@@ -78,8 +78,6 @@ impl MpvIpc {
                     }
                 };
 
-                debug!("MPV << {}", json);
-
                 if let Err(e) = write_half.write_all(json.as_bytes()).await {
                     error!("Failed to write to MPV socket: {}", e);
                     break;
@@ -99,8 +97,6 @@ impl MpvIpc {
                 if line.trim().is_empty() {
                     continue;
                 }
-
-                debug!("MPV >> {}", line);
 
                 let message: MpvMessage = match serde_json::from_str(&line) {
                     Ok(m) => m,

@@ -10,6 +10,8 @@ fn main() {
         "get_config",
         "update_config",
         "get_config_path",
+        "refresh_media_index",
+        "get_media_index_refreshing",
         "detect_available_players",
         "get_cached_players",
         "refresh_player_detection",
