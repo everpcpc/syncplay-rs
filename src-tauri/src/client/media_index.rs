@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::commands::connection::emit_error_message;
-use crate::utils::{hash_filename, strip_filename, PRIVACY_HIDDEN_FILENAME};
+use crate::player::controller::load_media_by_name;
+use crate::utils::{hash_filename, same_filename, strip_filename, PRIVACY_HIDDEN_FILENAME};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,20 @@ impl MediaIndexCache {
     }
 
     fn resolve(&self, filename: &str) -> Option<PathBuf> {
+        if let Some(path) = self.resolve_by_name(filename) {
+            return Some(path);
+        }
+        let base = Path::new(filename)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(filename);
+        if base != filename {
+            return self.resolve_by_name(base);
+        }
+        None
+    }
+
+    fn resolve_by_name(&self, filename: &str) -> Option<PathBuf> {
         let lower = filename.to_ascii_lowercase();
         if let Some(path) = self.find_existing(self.by_lower.get(&lower)) {
             return Some(path);
@@ -155,6 +170,16 @@ impl MediaIndex {
                     "media-index-updated",
                     serde_json::json!({ "timestamp": chrono::Utc::now().to_rfc3339() }),
                 );
+                let queued = state.playlist.get_queued_index_filename();
+                if let Some(filename) = queued {
+                    let current = state.client_state.get_file();
+                    let already_loaded = same_filename(current.as_deref(), Some(&filename));
+                    if !already_loaded && self.is_available(&filename) {
+                        if let Err(e) = load_media_by_name(state, &filename, true, false).await {
+                            tracing::warn!("Failed to load queued playlist item after scan: {}", e);
+                        }
+                    }
+                }
             }
             Ok(Err(ScanError::FirstFileTimeout(dir))) => {
                 self.disabled.store(true, Ordering::SeqCst);

@@ -532,6 +532,31 @@
   transform: translate(0, 50%);
 }
 
+.app-tooltip-portal {
+  position: fixed;
+  max-width: min(520px, 80vw);
+  padding: 10px 12px;
+  background: var(--app-panel-2);
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+  word-break: break-all;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.25);
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.app-tooltip-portal.is-visible {
+  opacity: 1;
+}
+
 .app-icon {
   width: 14px;
   height: 14px;
@@ -585,9 +610,10 @@
   color: var(--app-muted);
 }
 
-.app-item-active {
-  background-color: var(--app-accent-soft);
-  border: 1px solid var(--app-accent);
+.app-item-playing {
+  background: color-mix(in srgb, var(--app-panel-2) 90%, transparent);
+  border: 1px solid var(--app-border-strong);
+  box-shadow: inset 3px 0 0 0 var(--app-accent);
   color: var(--app-text);
 }
 

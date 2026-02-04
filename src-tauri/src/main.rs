@@ -19,7 +19,7 @@ fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "syncplay_tauri=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "syncplay_tauri=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
