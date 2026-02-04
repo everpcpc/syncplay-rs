@@ -4,8 +4,9 @@ use crate::app_state::{AppState, PlaylistEvent};
 use crate::config::SyncplayConfig;
 use crate::network::messages::{PlayState, StateMessage};
 use crate::network::messages::{PlaylistChange, PlaylistIndexUpdate, ProtocolMessage, SetMessage};
-use crate::player::controller::{load_media_by_name, playlist_item_available};
+use crate::player::controller::{load_media_by_name, resolve_media_path};
 use crate::utils::is_music_file;
+use crate::utils::is_url;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::sync::Arc;
@@ -133,13 +134,34 @@ pub async fn update_playlist(
 pub async fn check_playlist_items(
     items: Vec<String>,
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<PlaylistItemInfo>, String> {
+    let config = state.config.lock().clone();
     let mut results = Vec::with_capacity(items.len());
     for item in items {
-        let available = playlist_item_available(state.inner(), &item);
-        results.push(available);
+        let path = if is_url(&item) {
+            Some(item.clone())
+        } else {
+            state
+                .media_index
+                .resolve_path(&item)
+                .or_else(|| resolve_media_path(&config.player.media_directories, &item))
+                .map(|path| path.to_string_lossy().to_string())
+        };
+        let available = path.is_some();
+        results.push(PlaylistItemInfo {
+            filename: item,
+            path,
+            available,
+        });
     }
     Ok(results)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlaylistItemInfo {
+    pub filename: String,
+    pub path: Option<String>,
+    pub available: bool,
 }
 
 pub(crate) fn shared_playlists_enabled(state: &Arc<AppState>, config: &SyncplayConfig) -> bool {
