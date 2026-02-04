@@ -16,6 +16,10 @@ export function useWindowDrag(targetId: string) {
       if (event.buttons !== 1) {
         return;
       }
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-tauri-drag-region="false"], [data-tauri-drag-region=false]')) {
+        return;
+      }
       void getCurrentWindow().startDragging();
     };
 
