@@ -77,6 +77,13 @@ export function PlaylistPanel() {
     return `${speed.toFixed(2)}x`;
   };
 
+  const formatLastScan = (timestamp: number) => {
+    if (!timestamp) return "Never";
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return "Never";
+    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  };
+
   const updateUserSetting = async <K extends keyof SyncplayConfig["user"]>(
     key: K,
     value: SyncplayConfig["user"][K]
@@ -179,6 +186,9 @@ export function PlaylistPanel() {
     }
   };
 
+  const scanLabel = mediaIndexRefreshing ? "Scanning media directory" : "Scan media directory";
+  const scanTooltip = `${scanLabel} (Last scan: ${formatLastScan(mediaIndexVersion)})`;
+
   const handleRemoveItem = async (index: number) => {
     try {
       await invoke("update_playlist", {
@@ -272,9 +282,7 @@ export function PlaylistPanel() {
                 onClick={handleScanMediaDirectory}
                 disabled={mediaIndexRefreshing}
                 className="btn-neutral app-icon-button disabled:opacity-60 disabled:cursor-not-allowed app-tooltip-right"
-                aria-label={
-                  mediaIndexRefreshing ? "Scanning media directory" : "Scan media directory"
-                }
+                aria-label={scanTooltip}
               >
                 <LuRefreshCw className="app-icon" />
               </button>
