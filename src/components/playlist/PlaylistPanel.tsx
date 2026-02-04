@@ -167,14 +167,14 @@ export function PlaylistPanel() {
     }
   };
 
-  const handleRefreshMediaIndex = async () => {
+  const handleScanMediaDirectory = async () => {
     if (mediaIndexRefreshing) return;
     try {
       await invoke("refresh_media_index");
     } catch (error) {
       addNotification({
         type: "error",
-        message: "Failed to refresh media index",
+        message: "Failed to scan media directory",
       });
     }
   };
@@ -269,10 +269,12 @@ export function PlaylistPanel() {
                 <LuShield className="app-icon" />
               </button>
               <button
-                onClick={handleRefreshMediaIndex}
+                onClick={handleScanMediaDirectory}
                 disabled={mediaIndexRefreshing}
                 className="btn-neutral app-icon-button disabled:opacity-60 disabled:cursor-not-allowed app-tooltip-right"
-                aria-label={mediaIndexRefreshing ? "Refreshing media index" : "Refresh media index"}
+                aria-label={
+                  mediaIndexRefreshing ? "Scanning media directory" : "Scan media directory"
+                }
               >
                 <LuRefreshCw className="app-icon" />
               </button>
