@@ -17,7 +17,8 @@ import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { SyncplayConfig } from "../../types/config";
-import { useEffect, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import { MediaDirectoriesDialog } from "./MediaDirectoriesDialog";
 import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
 
@@ -39,43 +40,153 @@ export function PlaylistPanel() {
   const [showMediaDirectories, setShowMediaDirectories] = useState(false);
   const [showTrustedDomains, setShowTrustedDomains] = useState(false);
   const [availability, setAvailability] = useState<PlaylistItemStatus[]>([]);
+  const availabilityRef = useRef<PlaylistItemStatus[]>([]);
+  const [tooltipState, setTooltipState] = useState<{
+    text: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const tooltipHideTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    if (playlist.items.length === 0) {
-      setAvailability([]);
-      return () => {
-        cancelled = true;
-      };
-    }
-    const checkAvailability = async () => {
-      try {
-        const result = await invoke<PlaylistItemStatus[]>("check_playlist_items", {
-          items: playlist.items,
-        });
-        if (!cancelled) {
-          setAvailability(result);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setAvailability(
-            playlist.items.map((item) => ({
-              filename: item,
-              path: null,
-              available: false,
-            }))
-          );
-        }
+    availabilityRef.current = availability;
+  }, [availability]);
+
+  const refreshAvailability = useCallback(
+    async (items: string[], mode: "all" | "missing", cancelledRef: { cancelled: boolean }) => {
+      if (items.length === 0) {
+        setAvailability([]);
+        return;
       }
-    };
-    void checkAvailability();
+      const existing = availabilityRef.current;
+      const shouldRefreshAll = mode === "all" || existing.length !== items.length;
+      const targetIndexes = shouldRefreshAll
+        ? items.map((_, index) => index)
+        : existing
+            .map((info, index) => (info?.path ? null : index))
+            .filter((index): index is number => index !== null);
+      if (targetIndexes.length === 0) return;
+      const targetItems = targetIndexes.map((index) => items[index]);
+      let result: PlaylistItemStatus[] = [];
+      try {
+        result = await invoke<PlaylistItemStatus[]>("check_playlist_items", {
+          items: targetItems,
+        });
+      } catch (error) {
+        result = targetItems.map((item) => ({
+          filename: item,
+          path: null,
+          available: false,
+        }));
+      }
+      if (cancelledRef.cancelled) return;
+      setAvailability((prev) => {
+        const base =
+          shouldRefreshAll && result.length === items.length
+            ? result
+            : prev.length === items.length
+              ? [...prev]
+              : items.map((item) => ({
+                  filename: item,
+                  path: null,
+                  available: false,
+                }));
+        targetIndexes.forEach((targetIndex, idx) => {
+          base[targetIndex] = result[idx];
+        });
+        return base;
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false };
+    void refreshAvailability(playlist.items, "all", cancelledRef);
     return () => {
-      cancelled = true;
+      cancelledRef.cancelled = true;
     };
-  }, [playlist.items, config?.player.media_directories, mediaIndexVersion]);
+  }, [playlist.items, config?.player.media_directories, refreshAvailability]);
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false };
+    const items = playlist.items;
+    const existing = availabilityRef.current;
+    const mode = existing.length === 0 || existing.length !== items.length ? "all" : "missing";
+    void refreshAvailability(items, mode, cancelledRef);
+    return () => {
+      cancelledRef.cancelled = true;
+    };
+  }, [mediaIndexVersion, playlist.items, refreshAvailability]);
+
+  const showItemTooltip = (event: React.MouseEvent<HTMLElement>, text: string) => {
+    if (!text) return;
+    if (tooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(tooltipHideTimeoutRef.current);
+      tooltipHideTimeoutRef.current = null;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTooltipState({ text, rect });
+    requestAnimationFrame(() => {
+      setTooltipVisible(true);
+    });
+  };
+
+  const showItemTooltipOnFocus = (event: React.FocusEvent<HTMLElement>, text: string) => {
+    if (!text) return;
+    if (tooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(tooltipHideTimeoutRef.current);
+      tooltipHideTimeoutRef.current = null;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTooltipState({ text, rect });
+    requestAnimationFrame(() => {
+      setTooltipVisible(true);
+    });
+  };
+
+  const hideItemTooltip = () => {
+    setTooltipVisible(false);
+    if (tooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(tooltipHideTimeoutRef.current);
+    }
+    tooltipHideTimeoutRef.current = window.setTimeout(() => {
+      setTooltipState(null);
+      tooltipHideTimeoutRef.current = null;
+    }, 160);
+  };
+
+  const renderTooltip = () => {
+    if (!tooltipState || typeof document === "undefined") return null;
+    const margin = 8;
+    const { rect } = tooltipState;
+    const shouldShowAbove = rect.top > 80;
+    const top = shouldShowAbove ? rect.top - margin : rect.bottom + margin;
+    const transform = shouldShowAbove ? "translate(-50%, -100%)" : "translate(-50%, 0)";
+    return createPortal(
+      <div
+        className={`app-tooltip-portal ${tooltipVisible ? "is-visible" : ""}`}
+        style={{
+          top,
+          left: rect.left + rect.width / 2,
+          transform,
+        }}
+        role="tooltip"
+      >
+        {tooltipState.text}
+      </div>,
+      document.body
+    );
+  };
 
   const normalizePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+  const normalizeFilename = (value: string | null | undefined) => {
+    if (!value) return "";
+    const base = value.split(/[/\\\\]/).pop() || value;
+    return base.trim().toLowerCase();
+  };
 
   const formatTime = (seconds: number | null) => {
     if (seconds === null) return "--:--";
@@ -311,6 +422,8 @@ export function PlaylistPanel() {
 
   return (
     <div className="flex flex-col h-full">
+      {renderTooltip()}
+
       {/* Header */}
       <div className="p-4 border-b app-divider app-surface rounded-t-2xl">
         <div className="flex flex-col gap-2">
@@ -400,36 +513,62 @@ export function PlaylistPanel() {
                 const itemStatus = availability[index];
                 const available = itemStatus?.available ?? true;
                 const resolvedPath = itemStatus?.path ?? null;
+                const isCurrent =
+                  normalizeFilename(player.filename) !== "" &&
+                  normalizeFilename(player.filename) === normalizeFilename(item);
+                const tooltipText = resolvedPath ? `${item} • ${resolvedPath}` : item;
                 return (
                   <div
                     key={index}
                     onDoubleClick={() => {
-                      if (available) {
+                      if (available && !isCurrent) {
                         void handlePlayItem(index);
                       }
                     }}
-                    className={`group p-2 rounded-md text-sm ${
-                      index === playlist.currentIndex ? "app-item-active" : "app-panel-muted"
+                    className={`p-2 rounded-md text-sm ${
+                      isCurrent ? "app-item-playing" : "app-panel-muted group"
                     }`}
                   >
                     <div
-                      className="relative flex items-center gap-2 app-tooltip"
-                      aria-label={resolvedPath ?? "Unresolved path"}
+                      className="relative flex items-center gap-2"
+                      aria-label={tooltipText || "Unresolved path"}
                     >
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
                           void handlePlayItem(index);
                         }}
-                        disabled={!connection.connected || !available}
+                        disabled={!connection.connected || !available || isCurrent}
                         aria-label="Play"
-                        className="btn-neutral app-icon-button playlist-overlay-button app-text-muted hover:app-text-accent invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto disabled:opacity-40 app-tooltip-side-right !absolute left-0 top-1/2 z-10"
+                        className={`btn-neutral app-icon-button playlist-overlay-button app-text-muted hover:app-text-accent ${
+                          isCurrent
+                            ? "invisible pointer-events-none"
+                            : "invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto"
+                        } disabled:opacity-40 app-tooltip-side-right !absolute left-0 top-1/2 z-10`}
                       >
                         <LuPlay className="app-icon" />
                       </button>
-                      <span className={`truncate flex-1 ${available ? "" : "app-text-muted"}`}>
+                      <span
+                        className={`truncate flex-1 ${
+                          available
+                            ? isCurrent
+                              ? "app-text-accent font-semibold"
+                              : ""
+                            : "app-text-muted"
+                        }`}
+                        onMouseEnter={(event) => showItemTooltip(event, tooltipText)}
+                        onMouseLeave={hideItemTooltip}
+                        onFocus={(event) => showItemTooltipOnFocus(event, tooltipText)}
+                        onBlur={hideItemTooltip}
+                        tabIndex={0}
+                      >
                         {item}
                       </span>
+                      {isCurrent && (
+                        <span className="text-[10px] px-2 leading-4 rounded-full app-tag-muted app-text-accent">
+                          Playing
+                        </span>
+                      )}
                       {!available && (
                         <span className="text-[10px] px-2 py-1 rounded-full app-chip-muted app-text-danger">
                           Unavailable
@@ -442,7 +581,11 @@ export function PlaylistPanel() {
                         }}
                         disabled={!connection.connected}
                         aria-label="Remove"
-                        className="btn-neutral app-icon-button playlist-overlay-button app-text-danger hover:opacity-80 disabled:opacity-60 invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto app-tooltip-side-left !absolute right-0 top-1/2 z-10"
+                        className={`btn-neutral app-icon-button playlist-overlay-button app-text-danger hover:opacity-80 disabled:opacity-60 ${
+                          isCurrent
+                            ? "invisible pointer-events-none"
+                            : "invisible group-hover:visible hover:visible focus-visible:visible pointer-events-none group-hover:pointer-events-auto"
+                        } app-tooltip-side-left !absolute right-0 top-1/2 z-10`}
                       >
                         <LuTrash2 className="app-icon" />
                       </button>

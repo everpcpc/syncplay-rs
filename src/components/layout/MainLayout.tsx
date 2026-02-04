@@ -324,16 +324,17 @@ export function MainLayout() {
                   )}
                   {showTls && (
                     <div
-                      className="flex items-center justify-center px-2 py-1 rounded text-xs app-tag-success"
+                      className="flex items-center justify-center px-2 py-1 rounded text-xs app-panel-muted app-tooltip"
                       aria-label="TLS enabled"
-                      title="TLS enabled"
                     >
                       <LuLock className="app-icon" />
                     </div>
                   )}
                   <button
                     onClick={() => setShowConnectionDialog(true)}
-                    className="btn-primary app-icon-button"
+                    className={`app-icon-button btn-neutral ${
+                      connection.connected ? "app-tag-accent" : ""
+                    }`}
                     data-tauri-drag-region="false"
                     aria-label="Connect"
                   >

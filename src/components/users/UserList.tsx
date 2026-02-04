@@ -147,7 +147,16 @@ export function UserList() {
           {users.map((user) => (
             <div key={user.username} className="app-panel-muted rounded-md p-3 text-sm">
               <div className="flex items-center justify-between">
-                <span className="font-medium">{user.username}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{user.username}</span>
+                  <span
+                    className={`text-xs px-2.5 py-0.5 rounded-full ${
+                      user.isReady ? "app-tag-success" : "app-tag-muted"
+                    }`}
+                  >
+                    {user.isReady ? "Ready" : "Not Ready"}
+                  </span>
+                </div>
                 {user.isController && (
                   <span className="text-xs app-tag-accent px-2 py-0.5 rounded">Controller</span>
                 )}
@@ -164,7 +173,7 @@ export function UserList() {
                   >
                     File: {user.file}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span
                       className={`${
                         user.room === currentRoom &&
@@ -175,8 +184,9 @@ export function UserList() {
                     >
                       Size: {formatFileSize(user.fileSize ?? null)}
                     </span>
+                    <span className="app-text-muted">/</span>
                     <span
-                      className={`text-right ${
+                      className={`${
                         user.room === currentRoom &&
                         !hasSameDuration(user.fileDuration ?? null, currentUserDuration ?? null)
                           ? "app-text-warning"
@@ -188,16 +198,6 @@ export function UserList() {
                   </div>
                 </div>
               )}
-
-              <div className="flex items-center gap-2 mt-1">
-                <span
-                  className={`text-xs px-2.5 py-0.5 rounded-full ${
-                    user.isReady ? "app-tag-success" : "app-tag-muted"
-                  }`}
-                >
-                  {user.isReady ? "Ready" : "Not Ready"}
-                </span>
-              </div>
             </div>
           ))}
         </div>
