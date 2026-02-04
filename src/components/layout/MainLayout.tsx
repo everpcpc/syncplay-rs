@@ -38,12 +38,18 @@ import { SyncplayConfig } from "../../types/config";
 
 export function MainLayout() {
   const appWindow = isTauri() ? getCurrentWindow() : null;
+  const layoutRef = useRef<HTMLDivElement | null>(null);
+  const sidePanelsRef = useRef<HTMLDivElement | null>(null);
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
   const [sideLayout, setSideLayout] = useState<"columns" | "rows">("rows");
   const [theme, setTheme] = useState<ThemePreference>("dark");
   const [transparencyMode, setTransparencyMode] = useState<TransparencyPreference>("off");
+  const [layoutSize, setLayoutSize] = useState({ width: 0, height: 0 });
+  const [sidePanelsSize, setSidePanelsSize] = useState({ width: 0, height: 0 });
+  const [sideWidth, setSideWidth] = useState<number | null>(null);
+  const [sidePanelSize, setSidePanelSize] = useState<number | null>(null);
   const connection = useSyncplayStore((state) => state.connection);
   const tlsStatus = useSyncplayStore((state) => state.tlsStatus);
   const rttMs = useSyncplayStore((state) => state.rttMs);
@@ -52,6 +58,11 @@ export function MainLayout() {
   const addNotification = useNotificationStore((state) => state.addNotification);
   const initializedRef = useRef(false);
   const showPlaylistRef = useRef<boolean | null>(null);
+  const RESIZER_SIZE = 12;
+  const GAP_SIZE = 12;
+  const MAIN_MIN_WIDTH = 360;
+  const SIDE_MIN_WIDTH = 320;
+  const SIDE_PANEL_MIN = 200;
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -118,6 +129,54 @@ export function MainLayout() {
     setTransparencyMode(normalizedTransparency);
     applyTransparency(normalizedTransparency);
   }, [config]);
+
+  useEffect(() => {
+    if (!layoutRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      setLayoutSize({ width, height });
+    });
+    observer.observe(layoutRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!sidePanelsRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      setSidePanelsSize({ width, height });
+    });
+    observer.observe(sidePanelsRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!layoutSize.width) return;
+    setSideWidth((previous) => {
+      const min = SIDE_MIN_WIDTH;
+      const max = Math.max(min, layoutSize.width - MAIN_MIN_WIDTH - GAP_SIZE);
+      const fallback = Math.round(Math.min(560, Math.max(min, layoutSize.width * 0.36)));
+      const next = previous ?? fallback;
+      return Math.min(Math.max(next, min), max);
+    });
+  }, [layoutSize.width]);
+
+  useEffect(() => {
+    if (!showPlaylist) return;
+    const total = sideLayout === "rows" ? sidePanelsSize.height : sidePanelsSize.width;
+    if (!total) return;
+    setSidePanelSize((previous) => {
+      const min = SIDE_PANEL_MIN;
+      const max = Math.max(min, total - SIDE_PANEL_MIN - GAP_SIZE);
+      const fallback = Math.round(total / 2);
+      const next = previous ?? fallback;
+      return Math.min(Math.max(next, min), max);
+    });
+  }, [sidePanelsSize.height, sidePanelsSize.width, sideLayout, showPlaylist]);
 
   const handleToggleTheme = async () => {
     const previousTheme = theme;
@@ -208,18 +267,130 @@ export function MainLayout() {
     return `${rounded}ms`;
   };
   const rttLabel = formatRtt(rttMs);
+  const clampValue = (value: number, min: number, max: number) =>
+    Math.min(Math.max(value, min), max);
+  const layoutMainWidth =
+    sideWidth && layoutSize.width
+      ? Math.max(MAIN_MIN_WIDTH, layoutSize.width - sideWidth - GAP_SIZE)
+      : null;
+  const sidePanelPrimarySize = showPlaylist && sidePanelSize !== null ? sidePanelSize : null;
+  const sidePanelTotal = sideLayout === "rows" ? sidePanelsSize.height : sidePanelsSize.width;
+  const sidePanelSecondarySize =
+    sidePanelPrimarySize !== null && sidePanelTotal
+      ? Math.max(SIDE_PANEL_MIN, sidePanelTotal - sidePanelPrimarySize - GAP_SIZE)
+      : null;
+  const sidePanelFallback =
+    showPlaylist && sideLayout === "columns"
+      ? `minmax(0, 1fr) minmax(0, 1fr)`
+      : showPlaylist && sideLayout === "rows"
+        ? `minmax(0, 1fr) minmax(0, 1fr)`
+        : "minmax(0, 1fr)";
+  const mainResizerStyle =
+    layoutMainWidth !== null
+      ? {
+          left: `${layoutMainWidth + GAP_SIZE / 2}px`,
+          top: 0,
+          height: "100%",
+          width: `${RESIZER_SIZE}px`,
+          transform: "translateX(-50%)",
+        }
+      : undefined;
+  const sideResizerStyle =
+    showPlaylist && sidePanelPrimarySize !== null
+      ? sideLayout === "rows"
+        ? {
+            top: `${sidePanelPrimarySize + GAP_SIZE / 2}px`,
+            left: 0,
+            width: "100%",
+            height: `${RESIZER_SIZE}px`,
+            transform: "translateY(-50%)",
+          }
+        : {
+            left: `${sidePanelPrimarySize + GAP_SIZE / 2}px`,
+            top: 0,
+            width: `${RESIZER_SIZE}px`,
+            height: "100%",
+            transform: "translateX(-50%)",
+          }
+      : undefined;
+
+  const handleMainResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!layoutRef.current || sideWidth === null) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startSideWidth = sideWidth;
+    const rect = layoutRef.current.getBoundingClientRect();
+    const min = SIDE_MIN_WIDTH;
+    const max = Math.max(min, rect.width - MAIN_MIN_WIDTH - GAP_SIZE);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const nextWidth = clampValue(startSideWidth - delta, min, max);
+      setSideWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
+  const handleSideResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!sidePanelsRef.current || sidePanelPrimarySize === null) return;
+    event.preventDefault();
+    const isRows = sideLayout === "rows";
+    const startOffset = isRows ? event.clientY : event.clientX;
+    const startSize = sidePanelPrimarySize;
+    const rect = sidePanelsRef.current.getBoundingClientRect();
+    const total = isRows ? rect.height : rect.width;
+    const min = SIDE_PANEL_MIN;
+    const max = Math.max(min, total - SIDE_PANEL_MIN - GAP_SIZE);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const currentOffset = isRows ? moveEvent.clientY : moveEvent.clientX;
+      const delta = currentOffset - startOffset;
+      const nextSize = clampValue(startSize + delta, min, max);
+      setSidePanelSize(nextSize);
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
 
   return (
     <div className="app-shell">
       <NotificationContainer />
       <div className="drag-strip" id="titlebar" data-tauri-drag-region />
 
-      <div className="app-layout">
+      <div
+        className="app-layout"
+        ref={layoutRef}
+        style={{
+          gridTemplateColumns:
+            layoutMainWidth && sideWidth ? `${layoutMainWidth}px ${sideWidth}px` : undefined,
+        }}
+      >
         <section className="app-main-column">
           <main className="app-main-panel">
             <ChatPanel />
           </main>
         </section>
+
+        <div
+          className="app-resizer app-resizer-vertical app-resizer-overlay"
+          role="separator"
+          aria-orientation="vertical"
+          onPointerDown={handleMainResizeStart}
+          style={mainResizerStyle}
+        />
 
         <section className="app-side-column">
           <header
@@ -355,24 +526,37 @@ export function MainLayout() {
 
           <div
             className="app-side-panels"
+            ref={sidePanelsRef}
             style={{
               gridTemplateColumns:
                 sideLayout === "columns"
-                  ? showPlaylist
-                    ? "minmax(0, 1fr) minmax(0, 1fr)"
-                    : "minmax(0, 1fr)"
+                  ? showPlaylist && sidePanelPrimarySize !== null && sidePanelSecondarySize !== null
+                    ? `${sidePanelPrimarySize}px ${sidePanelSecondarySize}px`
+                    : sidePanelFallback
                   : "minmax(0, 1fr)",
               gridTemplateRows:
                 sideLayout === "rows"
-                  ? showPlaylist
-                    ? "minmax(0, 1fr) minmax(0, 1fr)"
-                    : "minmax(0, 1fr)"
+                  ? showPlaylist && sidePanelPrimarySize !== null && sidePanelSecondarySize !== null
+                    ? `${sidePanelPrimarySize}px ${sidePanelSecondarySize}px`
+                    : sidePanelFallback
                   : "minmax(0, 1fr)",
             }}
           >
             <aside className="app-side-panel app-sidebar p-5 overflow-visible">
               <UserList />
             </aside>
+
+            {showPlaylist && (
+              <div
+                className={`app-resizer app-resizer-overlay ${
+                  sideLayout === "rows" ? "app-resizer-horizontal" : "app-resizer-vertical"
+                }`}
+                role="separator"
+                aria-orientation={sideLayout === "rows" ? "horizontal" : "vertical"}
+                onPointerDown={handleSideResizeStart}
+                style={sideResizerStyle}
+              />
+            )}
 
             {showPlaylist && (
               <aside className="app-side-panel app-sidebar-right overflow-visible">

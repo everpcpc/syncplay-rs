@@ -145,6 +145,7 @@
   gap: 12px;
   padding: 0;
   min-height: 0;
+  position: relative;
   background: transparent;
 }
 
@@ -184,7 +185,62 @@
   min-height: 0;
   display: grid;
   gap: 12px;
+  position: relative;
   background: transparent;
+}
+
+.app-resizer {
+  position: relative;
+  background: transparent;
+  touch-action: none;
+  user-select: none;
+}
+
+.app-resizer::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background-color: var(--app-panel-hover);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.app-resizer:hover::after,
+.app-resizer:active::after {
+  opacity: 1;
+}
+
+.app-resizer-vertical {
+  cursor: col-resize;
+  width: 100%;
+  height: 100%;
+}
+
+.app-resizer-vertical::after {
+  top: 16%;
+  bottom: 16%;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+.app-resizer-horizontal {
+  cursor: row-resize;
+  width: 100%;
+  height: 100%;
+}
+
+.app-resizer-horizontal::after {
+  left: 16%;
+  right: 16%;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.app-resizer-overlay {
+  position: absolute;
+  z-index: 2;
 }
 
 .app-side-panel {
