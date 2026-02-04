@@ -12,8 +12,15 @@ pub struct User {
     pub file: Option<String>,
     pub file_size: Option<FileSizeInfo>,
     pub file_duration: Option<f64>,
-    pub is_ready: bool,
+    pub is_ready: Option<bool>,
     pub is_controller: bool,
+}
+
+impl User {
+    pub fn is_ready_with_file(&self) -> Option<bool> {
+        self.file.as_ref()?;
+        self.is_ready
+    }
 }
 
 /// Global playback state

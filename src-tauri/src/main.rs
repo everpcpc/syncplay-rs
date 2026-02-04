@@ -43,6 +43,19 @@ fn main() {
                 .sync_engine
                 .lock()
                 .update_from_config(&config.user);
+            app_state
+                .media_index
+                .update_directories(config.player.media_directories.clone());
+            app_state
+                .media_index
+                .clone()
+                .spawn_indexer(app_state.clone());
+            if !config.player.media_directories.is_empty() {
+                app_state
+                    .media_index
+                    .clone()
+                    .request_refresh(app_state.clone());
+            }
             let state = app_state.clone();
             tauri::async_runtime::spawn(async move {
                 crate::player::controller::spawn_player_state_loop(state);
@@ -57,9 +70,12 @@ fn main() {
             commands::room::change_room,
             commands::room::set_ready,
             commands::playlist::update_playlist,
+            commands::playlist::check_playlist_items,
             commands::config::get_config,
             commands::config::update_config,
             commands::config::get_config_path,
+            commands::config::refresh_media_index,
+            commands::config::get_media_index_refreshing,
             commands::player::detect_available_players,
             commands::player::get_cached_players,
             commands::player::refresh_player_detection,

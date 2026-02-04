@@ -73,6 +73,16 @@ mod tests {
 
     #[test]
     fn test_hello_message_serialization() {
+        let client_features = ClientFeatures {
+            shared_playlists: Some(true),
+            chat: Some(true),
+            readiness: Some(true),
+            managed_rooms: Some(true),
+            persistent_rooms: Some(true),
+            feature_list: Some(true),
+            set_others_readiness: Some(true),
+            ui_mode: Some("GUI".to_string()),
+        };
         let hello = ProtocolMessage::Hello {
             Hello: HelloMessage {
                 username: "testuser".to_string(),
@@ -82,14 +92,8 @@ mod tests {
                     password: None,
                 }),
                 version: "1.2.255".to_string(),
-                realversion: "1.7.4".to_string(),
-                features: Some(ClientFeatures {
-                    shared_playlists: Some(true),
-                    chat: Some(true),
-                    ready_state: Some(true),
-                    managed_rooms: Some(false),
-                    persistent_rooms: Some(false),
-                }),
+                realversion: "1.7.5".to_string(),
+                features: serde_json::to_value(client_features).ok(),
                 motd: None,
             },
         };

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { LuCheck, LuCircle, LuPencilLine, LuUsers } from "react-icons/lu";
 import { useSyncplayStore } from "../../store";
@@ -9,36 +9,13 @@ export function UserList() {
   const users = useSyncplayStore((state) => state.users);
   const connection = useSyncplayStore((state) => state.connection);
   const config = useSyncplayStore((state) => state.config);
-  const player = useSyncplayStore((state) => state.player);
   const addNotification = useNotificationStore((state) => state.addNotification);
   const [showRoomManager, setShowRoomManager] = useState(false);
-  const lastPausedRef = useRef<boolean | null>(null);
 
   const currentUser = users.find((user) => user.username === config?.user.username);
   const isReady = currentUser?.isReady ?? false;
 
   const currentRoom = currentUser?.room ?? config?.user.default_room ?? "Room";
-
-  useEffect(() => {
-    if (!connection.connected) {
-      lastPausedRef.current = player.paused;
-      return;
-    }
-    const lastPaused = lastPausedRef.current;
-    if (player.paused && lastPaused === false && isReady) {
-      void invoke("set_ready", { isReady: false }).catch((error) => {
-        const message =
-          typeof error === "string"
-            ? error
-            : (error as { message?: string })?.message || "Unknown error";
-        addNotification({
-          type: "error",
-          message: `Failed to update ready state: ${message}`,
-        });
-      });
-    }
-    lastPausedRef.current = player.paused;
-  }, [player.paused, isReady, connection.connected, addNotification]);
 
   const handleToggleReady = () => {
     if (!connection.connected) {
@@ -82,6 +59,59 @@ export function UserList() {
     );
   }
 
+  const normalizeFileSize = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string") return value;
+    return value > 0 ? value : null;
+  };
+
+  const formatFileSize = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) return "--";
+    if (typeof value === "string") return value;
+    if (value <= 0) return "--";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let size = value;
+    let index = 0;
+    while (size >= 1024 && index < units.length - 1) {
+      size /= 1024;
+      index += 1;
+    }
+    const precision = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+    return `${size.toFixed(precision)} ${units[index]}`;
+  };
+
+  const formatDuration = (duration: number | null | undefined) => {
+    if (duration === null || duration === undefined || duration <= 0) return "--";
+    const totalSeconds = Math.floor(duration);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const time = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    return hours > 0 ? `${hours}:${time}` : time;
+  };
+
+  const hasSameFileName = (a?: string | null, b?: string | null) =>
+    a && b ? a.toLowerCase() === b.toLowerCase() : false;
+
+  const hasSameFileSize = (a?: number | string | null, b?: number | string | null) => {
+    const left = normalizeFileSize(a);
+    const right = normalizeFileSize(b);
+    if (left === null || right === null) return false;
+    if (typeof left === "string" || typeof right === "string") {
+      return left === right;
+    }
+    return Math.abs(left - right) < 1;
+  };
+
+  const hasSameDuration = (a?: number | null, b?: number | null) => {
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    return Math.abs(a - b) < 1;
+  };
+
+  const currentUserFile = currentUser?.file ?? null;
+  const currentUserSize = currentUser?.fileSize;
+  const currentUserDuration = currentUser?.fileDuration;
+
   return (
     <div className="flex flex-col h-full gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -124,7 +154,39 @@ export function UserList() {
               </div>
 
               {user.file && (
-                <div className="text-xs app-text-muted mt-1 truncate">File: {user.file}</div>
+                <div className="mt-1 space-y-1">
+                  <div
+                    className={`text-xs truncate ${
+                      user.room === currentRoom && !hasSameFileName(user.file, currentUserFile)
+                        ? "app-text-warning"
+                        : "app-text-muted"
+                    }`}
+                  >
+                    File: {user.file}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <span
+                      className={`${
+                        user.room === currentRoom &&
+                        !hasSameFileSize(user.fileSize, currentUserSize)
+                          ? "app-text-warning"
+                          : "app-text-muted"
+                      }`}
+                    >
+                      Size: {formatFileSize(user.fileSize ?? null)}
+                    </span>
+                    <span
+                      className={`text-right ${
+                        user.room === currentRoom &&
+                        !hasSameDuration(user.fileDuration ?? null, currentUserDuration ?? null)
+                          ? "app-text-warning"
+                          : "app-text-muted"
+                      }`}
+                    >
+                      Duration: {formatDuration(user.fileDuration ?? null)}
+                    </span>
+                  </div>
+                </div>
               )}
 
               <div className="flex items-center gap-2 mt-1">

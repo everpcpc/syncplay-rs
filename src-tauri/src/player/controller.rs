@@ -1,4 +1,8 @@
 use crate::app_state::{AppState, PlayerStateEvent};
+use crate::commands::playlist::{
+    apply_playlist_index_from_server, change_playlist_from_filename, send_playlist_index,
+    shared_playlists_enabled,
+};
 use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::messages::{FileInfo, PlayState, ProtocolMessage, ReadyState, SetMessage};
 use crate::player::backend::{player_kind_from_path_or_default, PlayerBackend, PlayerKind};
@@ -10,7 +14,8 @@ use crate::player::mpv_ipc::MpvIpc;
 use crate::player::properties::PlayerState;
 use crate::player::vlc_rc::VlcBackend;
 use crate::utils::{
-    apply_privacy, is_trustable_and_trusted, is_url, same_filename, PRIVACY_HIDDEN_FILENAME,
+    apply_privacy, is_music_file, is_trustable_and_trusted, is_url, same_filename, truncate_text,
+    PRIVACY_HIDDEN_FILENAME,
 };
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -22,6 +27,18 @@ use tempfile::Builder;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
 use tracing::info;
+
+const PROTOCOL_TIMEOUT_SECONDS: f64 = 12.5;
+const RECENT_REWIND_THRESHOLD_SECONDS: f64 = 5.0;
+const RECENT_ADVANCE_GRACE_SECONDS: f64 = 8.0;
+const LAST_PAUSED_DIFF_THRESHOLD_SECONDS: f64 = 2.0;
+const PLAYLIST_LOAD_NEXT_FILE_MINIMUM_LENGTH: f64 = 10.0;
+const PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD: f64 = 5.0;
+const DOUBLE_CHECK_REWIND: bool = true;
+const DOUBLE_CHECK_REWIND_POSITION_THRESHOLD: f64 = 5.0;
+const DOUBLE_CHECK_REWIND_DELAYS: [f64; 3] = [0.5, 1.0, 1.5];
+const RECENT_REWIND_FILE_UPDATE_SHIFT_SECONDS: f64 = 4.5;
+const FILE_UPDATE_AFTER_LOAD_DELAY_MS: u64 = 200;
 
 struct PlayerConnectingGuard<'a> {
     flag: &'a parking_lot::Mutex<bool>,
@@ -240,35 +257,13 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
             let player_state = player.get_state();
             emit_player_state(&state, &player_state);
 
-            if !state.is_connected() {
+            if state.is_connected() && check_protocol_timeout(&state) {
                 continue;
             }
 
-            if let Some(prev) = last_observed.as_ref() {
-                if prev.paused == Some(true) && player_state.paused == Some(false) {
-                    let suppressed = {
-                        let mut guard = state.suppress_unpause_check.lock();
-                        let suppressed = *guard;
-                        if suppressed {
-                            *guard = false;
-                        }
-                        suppressed
-                    };
-                    if !suppressed {
-                        let config = state.config.lock().clone();
-                        if !instaplay_conditions_met(&state, &config) {
-                            if let Err(e) = player.set_paused(true).await {
-                                tracing::warn!("Failed to block unpause: {}", e);
-                            }
-                            if !state.client_state.is_ready() {
-                                if let Err(e) = send_ready_state(&state, true, true) {
-                                    tracing::warn!("Failed to send ready state: {}", e);
-                                }
-                            }
-                            continue;
-                        }
-                    }
-                }
+            if !state.is_connected() {
+                last_observed = Some(PlayerStateSnapshot::from(&player_state));
+                continue;
             }
 
             let is_placeholder = is_placeholder_file(&state, &player_state);
@@ -283,24 +278,86 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                 }
             }
 
-            if let (Some(position), Some(paused)) = (player_state.position, player_state.paused) {
+            if let (Some(position), Some(paused_value)) =
+                (player_state.position, player_state.paused)
+            {
                 let global = state.client_state.get_global_state();
-                let (local_pause_change, local_seeked) = state
-                    .local_playback_state
-                    .lock()
-                    .update_from_player(position, paused, global.position, global.paused);
+                let (mut local_pause_change, local_seeked, previous_state) = {
+                    let mut local_state = state.local_playback_state.lock();
+                    let previous_state = local_state.current();
+                    let (pause_change, seeked) = local_state.update_from_player(
+                        position,
+                        paused_value,
+                        global.position,
+                        global.paused,
+                    );
+                    (pause_change, seeked, previous_state)
+                };
+                if local_seeked {
+                    if let Some((prev_position, _)) = previous_state {
+                        if position < prev_position {
+                            *state.last_rewind_time.lock() = Some(Instant::now());
+                        }
+                    }
+                }
+
+                let mut paused = paused_value;
+                let mut skip_ready_toggle = false;
+                if local_pause_change && paused {
+                    let current_length = state.client_state.get_file_duration().unwrap_or(0.0);
+                    let near_end = current_length > PLAYLIST_LOAD_NEXT_FILE_MINIMUM_LENGTH
+                        && (position - current_length).abs()
+                            < PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD;
+                    if near_end {
+                        skip_ready_toggle = true;
+                        let _ = advance_playlist_check(&state, position).await;
+                    }
+                }
+                if local_pause_change && !paused {
+                    let suppressed = {
+                        let mut guard = state.suppress_unpause_check.lock();
+                        let suppressed = *guard;
+                        if suppressed {
+                            *guard = false;
+                        }
+                        suppressed
+                    };
+                    if suppressed {
+                        local_pause_change = false;
+                    }
+                }
+                if local_pause_change
+                    && !local_seeked
+                    && is_readiness_supported(&state, false)
+                    && !skip_ready_toggle
+                {
+                    let (adjusted_change, adjusted_paused) =
+                        apply_ready_toggle(&state, &player, paused, global.paused).await;
+                    local_pause_change = adjusted_change;
+                    paused = adjusted_paused;
+                }
+
                 if !is_placeholder
-                    && state.is_connected()
                     && state.last_global_update.lock().is_some()
                     && (local_pause_change || local_seeked)
                 {
-                    let play_state = PlayState {
-                        position,
-                        paused,
-                        do_seek: if local_seeked { Some(true) } else { None },
-                        set_by: None,
-                    };
                     let latency_calculation = *state.last_latency_calculation.lock();
+                    let play_state = if recently_rewound(&state) || recently_advanced(&state) {
+                        let global_state = state.client_state.get_global_state();
+                        PlayState {
+                            position: global_state.position,
+                            paused,
+                            do_seek: None,
+                            set_by: None,
+                        }
+                    } else {
+                        PlayState {
+                            position,
+                            paused,
+                            do_seek: if local_seeked { Some(true) } else { None },
+                            set_by: None,
+                        }
+                    };
                     if let Err(e) = crate::commands::connection::send_state_message(
                         &state,
                         Some(play_state),
@@ -338,7 +395,8 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
 pub async fn load_media_by_name(
     state: &Arc<AppState>,
     filename: &str,
-    send_update: bool,
+    reset_position: bool,
+    suppress_update: bool,
 ) -> Result<(), String> {
     let config = state.config.lock().clone();
     if is_url(filename) {
@@ -361,16 +419,24 @@ pub async fn load_media_by_name(
             .await
             .map_err(|e| format!("Failed to load URL: {}", e))?;
         state.client_state.set_file(Some(filename.to_string()));
-        if send_update {
-            let player_state = player.get_state();
-            send_file_update(state, &player_state);
-        } else {
+        *state.last_updated_file_time.lock() = Some(std::time::Instant::now());
+        state.playlist.opened_file();
+        if reset_position {
+            rewind_player(state).await?;
+            crate::commands::connection::evaluate_autoplay(state);
+        }
+        if suppress_update {
             *state.suppress_next_file_update.lock() = true;
+        } else {
+            schedule_file_update_after_load(state.clone());
         }
         return Ok(());
     }
 
-    let media_path = resolve_media_path(&config.player.media_directories, filename)
+    let media_path = state
+        .media_index
+        .resolve_path(filename)
+        .or_else(|| resolve_media_path(&config.player.media_directories, filename))
         .ok_or_else(|| format!("File not found in media directories: {}", filename))?;
 
     ensure_player_connected(state).await?;
@@ -386,31 +452,54 @@ pub async fn load_media_by_name(
         .map_err(|e| format!("Failed to load file: {}", e))?;
 
     state.client_state.set_file(Some(filename.to_string()));
-    if send_update {
-        let player_state = state
-            .player
-            .lock()
-            .clone()
-            .map(|player| player.get_state())
-            .unwrap_or_default();
-        send_file_update(state, &player_state);
-    } else {
+    *state.last_updated_file_time.lock() = Some(std::time::Instant::now());
+    state.playlist.opened_file();
+    if reset_position {
+        rewind_player(state).await?;
+        crate::commands::connection::evaluate_autoplay(state);
+    }
+    if suppress_update {
         *state.suppress_next_file_update.lock() = true;
+    } else {
+        schedule_file_update_after_load(state.clone());
     }
 
     Ok(())
+}
+
+fn schedule_file_update_after_load(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(FILE_UPDATE_AFTER_LOAD_DELAY_MS)).await;
+        let player = state.player.lock().clone();
+        let Some(player) = player else { return };
+        if let Err(e) = player.poll_state().await {
+            tracing::warn!("Failed to refresh player state after load: {}", e);
+        }
+        let player_state = player.get_state();
+        if is_placeholder_file(&state, &player_state) {
+            return;
+        }
+        if player_state.filename.is_none() && player_state.path.is_none() {
+            return;
+        }
+        send_file_update(&state, &player_state);
+    });
 }
 
 pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Option<PathBuf> {
     if filename == PRIVACY_HIDDEN_FILENAME {
         return None;
     }
+    let target = Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(filename);
     for directory in media_directories {
         let directory = directory.trim();
         if directory.is_empty() {
             continue;
         }
-        let candidate = Path::new(directory).join(filename);
+        let candidate = Path::new(directory).join(target);
         if candidate.exists() {
             return Some(candidate);
         }
@@ -432,7 +521,7 @@ pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Optio
                 continue;
             }
             let candidate_name = path.file_name()?.to_string_lossy();
-            if same_filename(Some(filename), Some(candidate_name.as_ref())) {
+            if same_filename(Some(target), Some(candidate_name.as_ref())) {
                 return Some(path);
             }
         }
@@ -690,29 +779,66 @@ fn emit_player_state(state: &Arc<AppState>, player_state: &PlayerState) {
     );
 }
 
-fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
-    if player_state.filename.is_none() {
+pub(crate) fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
+    if player_state.filename.is_none() && player_state.path.is_none() {
         return;
     }
     let config = state.config.lock().clone();
-    let raw_name = player_state.filename.clone();
-    let raw_size = player_state
-        .path
-        .as_ref()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .map(|metadata| metadata.len());
+    let raw_path = player_state.path.clone();
+    let raw_name = if let Some(path) = raw_path.as_deref() {
+        if is_url(path) {
+            Some(path.to_string())
+        } else {
+            player_state.filename.clone().or_else(|| {
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+            })
+        }
+    } else {
+        let filename = player_state.filename.as_deref();
+        if let Some(filename) = filename {
+            if is_url(filename) {
+                Some(filename.to_string())
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    };
+    let raw_size = if let Some(path) = raw_path.as_deref() {
+        if is_url(path) {
+            Some(0)
+        } else {
+            match std::fs::metadata(path) {
+                Ok(metadata) => Some(metadata.len()),
+                Err(_) => Some(0),
+            }
+        }
+    } else {
+        raw_name.as_deref().filter(|name| is_url(name)).map(|_| 0)
+    };
     let raw_duration = player_state.duration;
 
+    let max_len = state
+        .server_features
+        .lock()
+        .max_filename_length
+        .unwrap_or(250);
+    let outbound_name = raw_name.clone().map(|name| truncate_text(&name, max_len));
     let (name, size) = apply_privacy(
-        raw_name.clone(),
+        outbound_name,
         raw_size,
         &config.user.filename_privacy_mode,
         &config.user.filesize_privacy_mode,
     );
 
-    state.client_state.set_file(raw_name);
+    state.client_state.set_file(raw_name.clone());
     state.client_state.set_file_size(size.clone());
     state.client_state.set_file_duration(raw_duration);
+    *state.last_updated_file_time.lock() = Some(std::time::Instant::now());
 
     let Some(connection) = state.connection.lock().clone() else {
         return;
@@ -737,19 +863,70 @@ fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState) {
     };
     if let Err(e) = connection.send(message) {
         tracing::warn!("Failed to send file update: {}", e);
+        return;
     }
+    if let Err(e) = connection.send(ProtocolMessage::List { List: None }) {
+        tracing::warn!("Failed to request user list after file update: {}", e);
+    }
+
+    if let Some(raw_name) = raw_name {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = change_playlist_from_filename(&state_clone, &raw_name).await {
+                tracing::warn!("Failed to sync playlist from filename: {}", e);
+            }
+        });
+    }
+}
+
+pub(crate) async fn rewind_player(state: &Arc<AppState>) -> Result<(), String> {
+    ensure_player_connected(state).await?;
+    let player = state
+        .player
+        .lock()
+        .clone()
+        .ok_or_else(|| "Player not connected".to_string())?;
+    if let Err(e) = player.set_position(0.0).await {
+        tracing::warn!("Failed to rewind player: {}", e);
+    }
+    *state.last_rewind_time.lock() = Some(Instant::now());
+    schedule_double_check_rewind(player);
+    Ok(())
+}
+
+fn schedule_double_check_rewind(player: Arc<dyn PlayerBackend>) {
+    if !DOUBLE_CHECK_REWIND {
+        return;
+    }
+    tokio::spawn(async move {
+        for delay in DOUBLE_CHECK_REWIND_DELAYS {
+            sleep(Duration::from_secs_f64(delay)).await;
+            if let Err(e) = player.poll_state().await {
+                tracing::warn!("Failed to poll player during rewind check: {}", e);
+            }
+            if let Some(position) = player.get_state().position {
+                if position > DOUBLE_CHECK_REWIND_POSITION_THRESHOLD {
+                    if let Err(e) = player.set_position(0.0).await {
+                        tracing::warn!("Failed to rewind after double-check: {}", e);
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn file_info_changed(player_state: &PlayerState, last_sent: Option<&PlayerStateSnapshot>) -> bool {
     match last_sent {
         None => true,
         Some(prev) => {
-            prev.filename != player_state.filename || prev.duration != player_state.duration
+            prev.filename != player_state.filename
+                || prev.path != player_state.path
+                || prev.duration != player_state.duration
         }
     }
 }
 
-fn is_placeholder_file(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
+pub(crate) fn is_placeholder_file(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
     if let Some(name) = player_state.filename.as_deref() {
         if name == "placeholder.png" {
             return true;
@@ -770,6 +947,7 @@ struct PlayerStateSnapshot {
     position: Option<f64>,
     paused: Option<bool>,
     duration: Option<f64>,
+    path: Option<String>,
 }
 
 impl PlayerStateSnapshot {
@@ -779,74 +957,326 @@ impl PlayerStateSnapshot {
             position: state.position,
             paused: state.paused,
             duration: state.duration,
+            path: state.path.clone(),
         }
     }
 }
 
-async fn handle_end_of_file(state: &Arc<AppState>) {
+async fn advance_playlist_check(state: &Arc<AppState>, position: f64) -> bool {
     let config = state.config.lock().clone();
-    if !config.user.shared_playlist_enabled {
+    if !shared_playlists_enabled(state, &config) {
+        return false;
+    }
+    if state
+        .playlist
+        .not_just_changed(PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD)
+        && state.client_state.get_file().is_some()
+    {
+        state.client_state.set_file_duration(Some(position));
+    }
+    let current_length = state.client_state.get_file_duration().unwrap_or(0.0);
+    if current_length <= PLAYLIST_LOAD_NEXT_FILE_MINIMUM_LENGTH {
+        return false;
+    }
+    if (position - current_length).abs() >= PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD {
+        return false;
+    }
+    if !state
+        .playlist
+        .not_just_changed(PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD)
+    {
+        return false;
+    }
+    load_next_file_in_playlist(state, &config).await;
+    true
+}
+
+async fn load_next_file_in_playlist(state: &Arc<AppState>, config: &SyncplayConfig) {
+    if !shared_playlists_enabled(state, config) {
+        return;
+    }
+    if !is_playing_current_index(state) {
         return;
     }
 
-    if let Some(next) = state
-        .playlist
-        .next_with_loop(config.user.loop_at_end_of_playlist)
-    {
-        let items: Vec<String> = state
-            .playlist
-            .get_items()
-            .iter()
-            .map(|item| item.filename.clone())
-            .collect();
-        state.emit_event(
-            "playlist-updated",
-            crate::app_state::PlaylistEvent {
-                items,
-                current_index: state.playlist.get_current_index(),
-            },
-        );
-        if let Some(index) = state.playlist.get_current_index() {
-            let username = state.client_state.get_username();
-            let message = ProtocolMessage::Set {
-                Set: Box::new(SetMessage {
-                    room: None,
-                    file: None,
-                    user: None,
-                    ready: None,
-                    playlist_index: Some(crate::network::messages::PlaylistIndexUpdate {
-                        user: Some(username),
-                        index: Some(index),
-                    }),
-                    playlist_change: None,
-                    controller_auth: None,
-                    new_controlled_room: None,
-                    features: None,
-                }),
-            };
-            if let Some(connection) = state.connection.lock().clone() {
-                if let Err(e) = connection.send(message) {
-                    tracing::warn!("Failed to send playlist index update: {}", e);
-                }
+    let items = state.playlist.get_item_filenames();
+    if items.is_empty() {
+        return;
+    }
+
+    let loop_single = config.user.loop_single_files || is_playing_music(state);
+    if items.len() == 1 && loop_single {
+        state.playlist.opened_file();
+        let _ = rewind_player(state).await;
+        let player = state.player.lock().clone();
+        if let Some(player) = player {
+            if let Err(e) = player.set_paused(false).await {
+                tracing::warn!("Failed to unpause after looping file: {}", e);
             }
+            let player_clone = player.clone();
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(500)).await;
+                let _ = player_clone.set_paused(false).await;
+            });
         }
-        if let Err(e) = load_media_by_name(state, &next.filename, true).await {
-            tracing::warn!("Failed to load next item: {}", e);
+        return;
+    }
+
+    let loop_at_end = config.user.loop_at_end_of_playlist || is_playing_music(state);
+    let current_index = match state.playlist.get_current_index() {
+        Some(index) => index,
+        None => return,
+    };
+    let next_index = if current_index + 1 < items.len() {
+        current_index + 1
+    } else if loop_at_end {
+        0
+    } else {
+        return;
+    };
+
+    if let Some(filename) = items.get(next_index) {
+        if !playlist_item_available(state, filename) {
+            return;
         }
-    } else if config.user.loop_single_files {
-        if let Some(current) = state.playlist.get_current_item() {
-            if let Err(e) = load_media_by_name(state, &current.filename, true).await {
-                tracing::warn!("Failed to loop current item: {}", e);
-            }
-        } else if let Some(current) = state.client_state.get_file() {
-            if let Err(e) = load_media_by_name(state, &current, true).await {
-                tracing::warn!("Failed to loop current file: {}", e);
-            }
-        }
+    }
+
+    *state.last_advance_time.lock() = Some(Instant::now());
+    if let Err(e) = send_playlist_index(state, next_index, true) {
+        tracing::warn!("Failed to send playlist index advance: {}", e);
+    }
+    if let Err(e) = apply_playlist_index_from_server(state, next_index, true).await {
+        tracing::warn!("Failed to advance playlist: {}", e);
     }
 }
 
+fn is_playing_current_index(state: &Arc<AppState>) -> bool {
+    let Some(index) = state.playlist.get_current_index() else {
+        return false;
+    };
+    let items = state.playlist.get_item_filenames();
+    let Some(filename) = items.get(index) else {
+        return false;
+    };
+    let current_file = state.client_state.get_file();
+    same_filename(current_file.as_deref(), Some(filename))
+}
+
+pub fn playlist_item_available(state: &Arc<AppState>, filename: &str) -> bool {
+    if filename == PRIVACY_HIDDEN_FILENAME {
+        return false;
+    }
+    let (trusted_domains, only_trusted, media_directories) = {
+        let config = state.config.lock();
+        (
+            config.user.trusted_domains.clone(),
+            config.user.only_switch_to_trusted_domains,
+            config.player.media_directories.clone(),
+        )
+    };
+    if is_url(filename) {
+        let (trustable, trusted) =
+            is_trustable_and_trusted(filename, &trusted_domains, only_trusted);
+        return trustable && trusted;
+    }
+    if state.media_index.is_available(filename) {
+        return true;
+    }
+    resolve_media_path(&media_directories, filename).is_some()
+}
+
+async fn handle_end_of_file(state: &Arc<AppState>) {
+    if state
+        .playlist
+        .not_just_changed(PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD)
+        && state.client_state.get_file().is_some()
+    {
+        let player = state.player.lock().clone();
+        if let Some(player) = player {
+            if let Some(position) = player.get_state().position {
+                state.client_state.set_file_duration(Some(position));
+            }
+        }
+    }
+
+    let config = state.config.lock().clone();
+    if !shared_playlists_enabled(state, &config) {
+        return;
+    }
+    if !state
+        .playlist
+        .not_just_changed(PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD)
+    {
+        return;
+    }
+    load_next_file_in_playlist(state, &config).await;
+}
+
+fn current_user_can_control(state: &Arc<AppState>) -> bool {
+    let room = state.client_state.get_room();
+    if !crate::utils::is_controlled_room(&room) {
+        return true;
+    }
+    let username = state.client_state.get_username();
+    state
+        .client_state
+        .get_user(&username)
+        .map(|user| user.is_controller)
+        .unwrap_or(false)
+}
+
+fn is_playing_music(state: &Arc<AppState>) -> bool {
+    state
+        .client_state
+        .get_file()
+        .as_deref()
+        .map(is_music_file)
+        .unwrap_or(false)
+}
+
+fn seamless_music_override(state: &Arc<AppState>) -> bool {
+    is_playing_music(state) && recently_advanced(state)
+}
+
+fn is_readiness_supported(state: &Arc<AppState>, requires_other_users: bool) -> bool {
+    if !state.server_features.lock().readiness {
+        return false;
+    }
+    if !requires_other_users {
+        return true;
+    }
+    let room = state.client_state.get_room();
+    let username = state.client_state.get_username();
+    state
+        .client_state
+        .get_users_in_room(&room)
+        .iter()
+        .any(|user| user.username != username && user.is_ready_with_file().is_some())
+}
+
+fn recently_rewound(state: &Arc<AppState>) -> bool {
+    let Some(mut last_rewind) = *state.last_rewind_time.lock() else {
+        return false;
+    };
+    if let Some(last_updated) = *state.last_updated_file_time.lock() {
+        if last_updated > last_rewind {
+            if let Some(adjusted) = last_rewind.checked_sub(Duration::from_secs_f64(
+                RECENT_REWIND_FILE_UPDATE_SHIFT_SECONDS,
+            )) {
+                last_rewind = adjusted;
+            }
+        }
+    }
+    last_rewind.elapsed().as_secs_f64() < RECENT_REWIND_THRESHOLD_SECONDS
+}
+
+fn recently_advanced(state: &Arc<AppState>) -> bool {
+    let guard = state.last_advance_time.lock();
+    let Some(last_advance) = guard.as_ref() else {
+        return false;
+    };
+    last_advance.elapsed().as_secs_f64() < RECENT_ADVANCE_GRACE_SECONDS
+}
+
+fn check_protocol_timeout(state: &Arc<AppState>) -> bool {
+    let guard = state.last_global_update.lock();
+    let Some(last_global) = guard.as_ref() else {
+        return false;
+    };
+    if last_global.elapsed().as_secs_f64() <= PROTOCOL_TIMEOUT_SECONDS {
+        return false;
+    }
+    *state.last_global_update.lock() = None;
+    crate::commands::connection::emit_error_message(state, "Server timed out");
+    if let Some(connection) = state.connection.lock().clone() {
+        connection.disconnect();
+    }
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        crate::commands::connection::handle_connection_closed(&state_clone).await;
+    });
+    true
+}
+
+async fn apply_ready_toggle(
+    state: &Arc<AppState>,
+    player: &Arc<dyn PlayerBackend>,
+    paused: bool,
+    global_paused: bool,
+) -> (bool, bool) {
+    let config = state.config.lock().clone();
+    let mut paused_value = paused;
+
+    if !current_user_can_control(state) {
+        let new_ready = !state.client_state.is_ready();
+        if let Err(e) = player.set_paused(global_paused).await {
+            tracing::warn!("Failed to enforce pause state: {}", e);
+        }
+        paused_value = global_paused;
+        if !(recently_rewound(state) || (global_paused && !recently_advanced(state))) {
+            let _ = send_ready_state(state, new_ready, true);
+            let message = if new_ready {
+                "You are now set as ready"
+            } else {
+                "You are now set as not ready"
+            };
+            crate::commands::connection::emit_system_message(state, message);
+            crate::commands::connection::maybe_show_osd(state, &config, message, true);
+        }
+        return (false, paused_value);
+    }
+
+    if seamless_music_override(state) {
+        if let Err(e) = player.set_paused(paused_value).await {
+            tracing::warn!(
+                "Failed to enforce pause during seamless music override: {}",
+                e
+            );
+        }
+        return (false, paused_value);
+    }
+
+    if recently_rewound(state) && global_paused && !recently_advanced(state) {
+        if let Err(e) = player.set_paused(global_paused).await {
+            tracing::warn!("Failed to enforce pause after rewind: {}", e);
+        }
+        paused_value = global_paused;
+        return (false, paused_value);
+    }
+
+    if !paused_value && !instaplay_conditions_met(state, &config) {
+        if let Err(e) = player.set_paused(true).await {
+            tracing::warn!("Failed to block unpause: {}", e);
+        }
+        paused_value = true;
+        let _ = send_ready_state(state, true, true);
+        let message = "You are now set as ready - unpause again to unpause";
+        crate::commands::connection::emit_system_message(state, message);
+        crate::commands::connection::maybe_show_osd(state, &config, message, true);
+        return (false, paused_value);
+    }
+
+    if let Some(last_paused) = state.last_paused_on_leave_time.lock().take() {
+        if last_paused.elapsed().as_secs_f64() < LAST_PAUSED_DIFF_THRESHOLD_SECONDS {
+            return (true, paused_value);
+        }
+    }
+
+    let desired_ready = !paused_value;
+    if desired_ready != state.client_state.is_ready() {
+        let _ = send_ready_state(state, desired_ready, false);
+    }
+
+    (true, paused_value)
+}
+
 fn instaplay_conditions_met(state: &Arc<AppState>, config: &SyncplayConfig) -> bool {
+    if is_playing_music(state) {
+        return true;
+    }
+    if !current_user_can_control(state) {
+        return false;
+    }
     match config.user.unpause_action {
         UnpauseAction::Always => true,
         UnpauseAction::IfAlreadyReady => state.client_state.is_ready(),
@@ -859,11 +1289,7 @@ fn instaplay_conditions_met(state: &Arc<AppState>, config: &SyncplayConfig) -> b
             }
             let min_users = config.user.autoplay_min_users;
             if min_users > 0 {
-                let count = users_in_room_count(
-                    state,
-                    &state.client_state.get_room(),
-                    &state.client_state.get_username(),
-                );
+                let count = users_in_room_count(state, &state.client_state.get_room());
                 return count >= min_users as usize;
             }
             true
@@ -874,18 +1300,23 @@ fn instaplay_conditions_met(state: &Arc<AppState>, config: &SyncplayConfig) -> b
 fn all_other_users_ready(state: &Arc<AppState>, room: &str) -> bool {
     let username = state.client_state.get_username();
     for user in state.client_state.get_users_in_room(room) {
-        if user.username != username && !user.is_ready {
+        if user.username != username && user.is_ready_with_file() == Some(false) {
             return false;
         }
     }
     true
 }
 
-fn users_in_room_count(state: &Arc<AppState>, room: &str, username: &str) -> usize {
-    let users = state.client_state.get_users_in_room(room);
-    let mut count = users.len();
-    if !users.iter().any(|user| user.username == username) {
-        count += 1;
+fn users_in_room_count(state: &Arc<AppState>, room: &str) -> usize {
+    let mut count = 1;
+    let username = state.client_state.get_username();
+    for user in state.client_state.get_users_in_room(room) {
+        if user.username == username {
+            continue;
+        }
+        if user.is_ready_with_file() == Some(true) {
+            count += 1;
+        }
     }
     count
 }
@@ -895,6 +1326,9 @@ fn send_ready_state(
     is_ready: bool,
     manually_initiated: bool,
 ) -> Result<(), String> {
+    if !state.server_features.lock().readiness {
+        return Ok(());
+    }
     state.client_state.set_ready(is_ready);
     let username = state.client_state.get_username();
     let message = ProtocolMessage::Set {

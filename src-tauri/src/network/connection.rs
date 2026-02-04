@@ -11,6 +11,8 @@ use super::messages::ProtocolMessage;
 use super::protocol::SyncplayCodec;
 use super::tls::upgrade_to_tls;
 
+const CONNECT_TIMEOUT_SECONDS: u64 = 30;
+
 /// Connection state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -105,9 +107,14 @@ impl Connection {
         *self.port.lock() = port;
 
         // Connect TCP stream
-        let stream = TcpStream::connect(format!("{}:{}", host, port))
-            .await
-            .context("Failed to connect to server")?;
+        let address = format!("{}:{}", host, port);
+        let stream = tokio::time::timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECONDS),
+            TcpStream::connect(&address),
+        )
+        .await
+        .context("Connection attempt timed out")?
+        .context("Failed to connect to server")?;
 
         info!("TCP connection established");
         *self.state.lock() = ConnectionState::Connected;

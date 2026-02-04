@@ -1,11 +1,45 @@
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use url::Url;
 
 use crate::config::PrivacyMode;
 use crate::network::messages::FileSizeInfo;
 
 pub const PRIVACY_HIDDEN_FILENAME: &str = "**Hidden filename**";
+pub const MUSIC_FORMATS: [&str; 8] = [
+    ".mp3", ".m4a", ".m4p", ".wav", ".aiff", ".r", ".ogg", ".flac",
+];
+
+pub fn truncate_text(value: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() <= max_len {
+        return value.to_string();
+    }
+    String::from_utf8_lossy(&bytes[..max_len]).to_string()
+}
+
+pub fn is_music_file(filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    MUSIC_FORMATS.iter().any(|ext| lower.ends_with(ext))
+}
+
+pub fn playlist_filename_from_path(path: &str) -> Option<String> {
+    if is_url(path) {
+        return Some(path.to_string());
+    }
+    let candidate = Path::new(path);
+    if candidate.is_file() {
+        return candidate
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string());
+    }
+    None
+}
 
 pub fn is_url(value: &str) -> bool {
     if !value.contains("://") {
@@ -251,8 +285,33 @@ pub fn is_controlled_room(room: &str) -> bool {
     hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-pub fn truncate_text(value: &str, max_length: usize) -> String {
-    value.chars().take(max_length).collect()
+pub fn version_meets_min(version: &str, min_version: &str) -> bool {
+    fn parse_parts(value: &str) -> Vec<u32> {
+        let sanitized: String = value
+            .chars()
+            .map(|c| if c.is_ascii_digit() { c } else { '.' })
+            .collect();
+        sanitized
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .map(|part| part.parse::<u32>().unwrap_or(0))
+            .collect()
+    }
+
+    let current = parse_parts(version);
+    let minimum = parse_parts(min_version);
+    let max_len = current.len().max(minimum.len());
+    for idx in 0..max_len {
+        let a = *current.get(idx).unwrap_or(&0);
+        let b = *minimum.get(idx).unwrap_or(&0);
+        if a > b {
+            return true;
+        }
+        if a < b {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

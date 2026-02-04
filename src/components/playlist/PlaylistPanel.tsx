@@ -4,19 +4,20 @@ import {
   LuChevronRight,
   LuFolder,
   LuListMusic,
+  LuPlay,
   LuPlus,
+  LuRefreshCw,
   LuRepeat,
   LuRepeat1,
   LuShield,
   LuTrash2,
   LuUsers,
-  LuX,
 } from "react-icons/lu";
 import { useNotificationStore } from "../../store/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { SyncplayConfig } from "../../types/config";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MediaDirectoriesDialog } from "./MediaDirectoriesDialog";
 import { TrustedDomainsDialog } from "./TrustedDomainsDialog";
 
@@ -26,9 +27,40 @@ export function PlaylistPanel() {
   const player = useSyncplayStore((state) => state.player);
   const config = useSyncplayStore((state) => state.config);
   const setConfig = useSyncplayStore((state) => state.setConfig);
+  const mediaIndexVersion = useSyncplayStore((state) => state.mediaIndexVersion);
+  const mediaIndexRefreshing = useSyncplayStore((state) => state.mediaIndexRefreshing);
   const addNotification = useNotificationStore((state) => state.addNotification);
   const [showMediaDirectories, setShowMediaDirectories] = useState(false);
   const [showTrustedDomains, setShowTrustedDomains] = useState(false);
+  const [availability, setAvailability] = useState<boolean[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (playlist.items.length === 0) {
+      setAvailability([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const checkAvailability = async () => {
+      try {
+        const result = await invoke<boolean[]>("check_playlist_items", {
+          items: playlist.items,
+        });
+        if (!cancelled) {
+          setAvailability(result);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAvailability(playlist.items.map(() => true));
+        }
+      }
+    };
+    void checkAvailability();
+    return () => {
+      cancelled = true;
+    };
+  }, [playlist.items, config?.player.media_directories, mediaIndexVersion]);
 
   const normalizePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -135,6 +167,18 @@ export function PlaylistPanel() {
     }
   };
 
+  const handleRefreshMediaIndex = async () => {
+    if (mediaIndexRefreshing) return;
+    try {
+      await invoke("refresh_media_index");
+    } catch (error) {
+      addNotification({
+        type: "error",
+        message: "Failed to refresh media index",
+      });
+    }
+  };
+
   const handleRemoveItem = async (index: number) => {
     try {
       await invoke("update_playlist", {
@@ -143,6 +187,18 @@ export function PlaylistPanel() {
       });
     } catch (error) {
       console.error("Failed to remove item:", error);
+    }
+  };
+
+  const handlePlayItem = async (index: number) => {
+    if (!connection.connected) return;
+    try {
+      await invoke("update_playlist", {
+        action: "select",
+        filename: index.toString(),
+      });
+    } catch (error) {
+      console.error("Failed to select playlist item:", error);
     }
   };
 
@@ -213,6 +269,14 @@ export function PlaylistPanel() {
                 <LuShield className="app-icon" />
               </button>
               <button
+                onClick={handleRefreshMediaIndex}
+                disabled={mediaIndexRefreshing}
+                className="btn-neutral app-icon-button disabled:opacity-60 disabled:cursor-not-allowed app-tooltip-right"
+                aria-label={mediaIndexRefreshing ? "Refreshing media index" : "Refresh media index"}
+              >
+                <LuRefreshCw className="app-icon" />
+              </button>
+              <button
                 onClick={() => setShowMediaDirectories(true)}
                 className="btn-neutral app-icon-button app-tooltip-right"
                 aria-label="Media directories"
@@ -223,9 +287,8 @@ export function PlaylistPanel() {
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <div
-              className="flex items-center justify-center w-7 h-7 rounded-md app-panel-muted"
+              className="flex items-center justify-center w-7 h-7 rounded-md app-panel-muted app-tooltip"
               aria-label={player.paused ? "Paused" : "Playing"}
-              title={player.paused ? "Paused" : "Playing"}
             >
               {player.paused ? <span className="app-text-warning">⏸</span> : <span>▶</span>}
             </div>
@@ -250,26 +313,57 @@ export function PlaylistPanel() {
           <p className="app-text-muted text-sm">No items in playlist</p>
         ) : (
           <div className="space-y-2">
-            {playlist.items.map((item, index) => (
-              <div
-                key={index}
-                className={`p-2 rounded-md text-sm ${
-                  index === playlist.currentIndex ? "app-item-active" : "app-panel-muted"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="truncate flex-1">{item}</span>
-                  <button
-                    onClick={() => handleRemoveItem(index)}
-                    disabled={!connection.connected}
-                    className="ml-2 app-text-danger hover:opacity-80 disabled:opacity-60 app-tooltip"
-                    aria-label="Remove"
+            {playlist.items.map((item, index) =>
+              (() => {
+                const available = availability[index] ?? true;
+                return (
+                  <div
+                    key={index}
+                    onDoubleClick={() => {
+                      if (available) {
+                        void handlePlayItem(index);
+                      }
+                    }}
+                    className={`group p-2 rounded-md text-sm ${
+                      index === playlist.currentIndex ? "app-item-active" : "app-panel-muted"
+                    }`}
                   >
-                    <LuX className="app-icon" />
-                  </button>
-                </div>
-              </div>
-            ))}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handlePlayItem(index);
+                        }}
+                        disabled={!connection.connected || !available}
+                        aria-label="Play"
+                        className="app-icon-button app-text-muted hover:app-text-accent opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto disabled:opacity-40 app-tooltip-side-right"
+                      >
+                        <LuPlay className="app-icon" />
+                      </button>
+                      <span className={`truncate flex-1 ${available ? "" : "app-text-muted"}`}>
+                        {item}
+                      </span>
+                      {!available && (
+                        <span className="text-[10px] px-2 py-1 rounded-full app-chip-muted app-text-danger">
+                          Missing
+                        </span>
+                      )}
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleRemoveItem(index);
+                        }}
+                        disabled={!connection.connected}
+                        aria-label="Remove"
+                        className="app-icon-button app-text-danger hover:opacity-80 disabled:opacity-60 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto app-tooltip-side-left"
+                      >
+                        <LuTrash2 className="app-icon" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()
+            )}
           </div>
         )}
       </div>

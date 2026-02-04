@@ -76,6 +76,10 @@ pub enum ChatCommand {
     Ready,
     /// Set not ready: /unready
     Unready,
+    /// Set another user as ready
+    SetReady(String),
+    /// Set another user as not ready
+    SetNotReady(String),
     /// Unknown command
     Unknown(String),
 }
@@ -105,6 +109,22 @@ impl ChatCommand {
             "/help" | "/h" | "/?" => Some(ChatCommand::Help),
             "/ready" => Some(ChatCommand::Ready),
             "/unready" => Some(ChatCommand::Unready),
+            "/setready" | "/sr" => {
+                if parts.len() > 1 {
+                    Some(ChatCommand::SetReady(parts[1..].join(" ")))
+                } else {
+                    Some(ChatCommand::Unknown("Usage: /setready <name>".to_string()))
+                }
+            }
+            "/setnotready" | "/sn" | "/snr" => {
+                if parts.len() > 1 {
+                    Some(ChatCommand::SetNotReady(parts[1..].join(" ")))
+                } else {
+                    Some(ChatCommand::Unknown(
+                        "Usage: /setnotready <name>".to_string(),
+                    ))
+                }
+            }
             _ => Some(ChatCommand::Unknown(format!(
                 "Unknown command: {}",
                 command
@@ -119,6 +139,8 @@ impl ChatCommand {
 /list or /l - List all users in the current room
 /ready - Mark yourself as ready
 /unready - Mark yourself as not ready
+/setready <name> or /sr <name> - Set user as ready
+/setnotready <name> or /sn <name> - Set user as not ready
 /help or /h or /? - Show this help message"#
             .to_string()
     }
