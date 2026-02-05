@@ -622,9 +622,7 @@ fn resolve_placeholder_path(state: &AppState) -> Option<PathBuf> {
         "resources/placeholder.png",
         "placeholder.png",
         "src-tauri/resources/placeholder.png",
-        "app-icon.png",
         "icon.svg",
-        "app-icon.svg",
     ];
     if let Some(handle) = state.app_handle.lock().clone() {
         for name in candidates {
