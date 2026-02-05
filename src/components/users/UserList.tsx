@@ -164,9 +164,7 @@ export function UserList() {
                     {user.isReady ? "Ready" : "Not Ready"}
                   </span>
                   {currentUsername === user.username && (
-                    <span className="text-[10px] app-tag-accent px-2 py-0 rounded-full">
-                      You
-                    </span>
+                    <span className="text-[10px] app-tag-accent px-2 py-0 rounded-full">You</span>
                   )}
                 </div>
                 {user.isController && (

@@ -368,7 +368,9 @@ export function PlaylistPanel() {
         }
       }
 
-      const mediaDirectories = baseConfig.player.media_directories.filter((dir) => dir.trim() !== "");
+      const mediaDirectories = baseConfig.player.media_directories.filter(
+        (dir) => dir.trim() !== ""
+      );
       const normalizedDirs = mediaDirectories.map(normalizePath);
       const rejected: string[] = [];
 
@@ -465,28 +467,25 @@ export function PlaylistPanel() {
     return items.length;
   }, []);
 
-  const scheduleDragGhostUpdate = useCallback(
-    (x: number, y: number) => {
-      if (dragGhostRafRef.current !== null) return;
-      dragGhostRafRef.current = window.requestAnimationFrame(() => {
-        dragGhostRafRef.current = null;
-        const dragState = dragStartRef.current;
-        if (!dragState?.active) return;
-        setDragGhost((prev) =>
-          prev
-            ? { ...prev, x, y }
-            : {
-                text: dragState.text,
-                width: dragState.width,
-                height: dragState.height,
-                x,
-                y,
-              }
-        );
-      });
-    },
-    []
-  );
+  const scheduleDragGhostUpdate = useCallback((x: number, y: number) => {
+    if (dragGhostRafRef.current !== null) return;
+    dragGhostRafRef.current = window.requestAnimationFrame(() => {
+      dragGhostRafRef.current = null;
+      const dragState = dragStartRef.current;
+      if (!dragState?.active) return;
+      setDragGhost((prev) =>
+        prev
+          ? { ...prev, x, y }
+          : {
+              text: dragState.text,
+              width: dragState.width,
+              height: dragState.height,
+              x,
+              y,
+            }
+      );
+    });
+  }, []);
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
@@ -512,31 +511,28 @@ export function PlaylistPanel() {
     [getDropIndex, scheduleDragGhostUpdate]
   );
 
-  const handlePointerUp = useCallback(
-    (event: PointerEvent) => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      const dragState = dragStartRef.current;
-      dragStartRef.current = null;
-      setDraggingIndex(null);
-      setDragGhost(null);
-      if (dragGhostRafRef.current !== null) {
-        window.cancelAnimationFrame(dragGhostRafRef.current);
-        dragGhostRafRef.current = null;
-      }
-      if (!dragState?.active) {
-        dragIndexRef.current = null;
-        dragOverIndexRef.current = null;
-        return;
-      }
-      const fromIndex = dragState.index;
-      const toIndex = dragOverIndexRef.current ?? fromIndex;
+  const handlePointerUp = useCallback(() => {
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+    const dragState = dragStartRef.current;
+    dragStartRef.current = null;
+    setDraggingIndex(null);
+    setDragGhost(null);
+    if (dragGhostRafRef.current !== null) {
+      window.cancelAnimationFrame(dragGhostRafRef.current);
+      dragGhostRafRef.current = null;
+    }
+    if (!dragState?.active) {
       dragIndexRef.current = null;
       dragOverIndexRef.current = null;
-      void handleReorderItems(fromIndex, toIndex);
-    },
-    [handlePointerMove, handleReorderItems]
-  );
+      return;
+    }
+    const fromIndex = dragState.index;
+    const toIndex = dragOverIndexRef.current ?? fromIndex;
+    dragIndexRef.current = null;
+    dragOverIndexRef.current = null;
+    void handleReorderItems(fromIndex, toIndex);
+  }, [handlePointerMove, handleReorderItems]);
 
   useEffect(() => {
     if (!isTauri()) return;
