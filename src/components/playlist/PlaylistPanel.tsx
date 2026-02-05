@@ -14,8 +14,9 @@ import {
   LuUsers,
 } from "react-icons/lu";
 import { useNotificationStore } from "../../store/notifications";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { SyncplayConfig } from "../../types/config";
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
@@ -41,6 +42,29 @@ export function PlaylistPanel() {
   const [showTrustedDomains, setShowTrustedDomains] = useState(false);
   const [availability, setAvailability] = useState<PlaylistItemStatus[]>([]);
   const availabilityRef = useRef<PlaylistItemStatus[]>([]);
+  const playlistContainerRef = useRef<HTMLDivElement | null>(null);
+  const dragIndexRef = useRef<number | null>(null);
+  const dragOverIndexRef = useRef<number | null>(null);
+  const dragStartRef = useRef<{
+    index: number;
+    startX: number;
+    startY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    text: string;
+    active: boolean;
+  } | null>(null);
+  const dragGhostRafRef = useRef<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragGhost, setDragGhost] = useState<{
+    text: string;
+    width: number;
+    height: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const [tooltipState, setTooltipState] = useState<{
     text: string;
     rect: DOMRect;
@@ -179,8 +203,35 @@ export function PlaylistPanel() {
     );
   };
 
-  const normalizePath = (path: string) =>
-    path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const renderDragGhost = () => {
+    if (!dragGhost || typeof document === "undefined") return null;
+    return createPortal(
+      <div
+        className="pointer-events-none fixed"
+        style={{
+          left: dragGhost.x,
+          top: dragGhost.y,
+          width: dragGhost.width,
+          height: dragGhost.height,
+          zIndex: 9999,
+          opacity: 0.92,
+          transform: "scale(1.02)",
+          transformOrigin: "top left",
+          transition: "transform 120ms ease, opacity 120ms ease",
+        }}
+      >
+        <div className="h-full w-full rounded-md app-panel-muted text-sm px-2 py-2 shadow-lg opacity-95">
+          {dragGhost.text}
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
+  const normalizePath = useCallback(
+    (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(),
+    []
+  );
 
   const normalizeFilename = (value: string | null | undefined) => {
     if (!value) return "";
@@ -297,57 +348,226 @@ export function PlaylistPanel() {
     }
   };
 
+  const handleDropPaths = useCallback(
+    async (paths: string[]) => {
+      if (!connection.connected) return;
+
+      const resolvedPaths = paths.map((path) => path.trim()).filter((path) => path !== "");
+      if (resolvedPaths.length === 0) return;
+
+      let baseConfig: SyncplayConfig | null = config;
+      if (!baseConfig) {
+        try {
+          baseConfig = await invoke<SyncplayConfig>("get_config");
+        } catch (error) {
+          addNotification({
+            type: "error",
+            message: "Failed to load config for dropped files",
+          });
+          return;
+        }
+      }
+
+      const mediaDirectories = baseConfig.player.media_directories.filter(
+        (dir) => dir.trim() !== ""
+      );
+      const normalizedDirs = mediaDirectories.map(normalizePath);
+      const rejected: string[] = [];
+
+      for (const path of resolvedPaths) {
+        const normalizedFile = normalizePath(path);
+        const isInDirectory =
+          normalizedDirs.length > 0 &&
+          normalizedDirs.some((dir) => normalizedFile.startsWith(`${dir}/`));
+        const filename = isInDirectory ? path.split(/[/\\\\]/).pop() || path : path;
+        try {
+          await invoke("update_playlist", {
+            action: "add",
+            filename,
+          });
+        } catch (error) {
+          rejected.push(path);
+        }
+      }
+
+      if (rejected.length > 0) {
+        addNotification({
+          type: "warning",
+          message: `Skipped ${rejected.length} file(s) that could not be added`,
+        });
+      }
+    },
+    [addNotification, config, connection.connected, normalizePath]
+  );
+
   const handleDropFiles = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!connection.connected) return;
+    if (isTauri()) return;
 
     const files = Array.from(event.dataTransfer.files);
     const paths = files
-      .map((file) => (file as { path?: string }).path)
+      .map((file) => (file as { path?: string }).path ?? file.name)
       .filter((path): path is string => Boolean(path));
     if (paths.length === 0) return;
 
-    let baseConfig: SyncplayConfig | null = config;
-    if (!baseConfig) {
+    await handleDropPaths(paths);
+  };
+
+  const handleReorderItems = useCallback(
+    async (fromIndex: number, toIndex: number) => {
+      if (!connection.connected) return;
+      const count = playlist.items.length;
+      if (fromIndex < 0 || fromIndex >= count) return;
+      if (toIndex < 0 || toIndex > count) return;
+      if (fromIndex === toIndex) return;
+
+      const nextItems = [...playlist.items];
+      const [moved] = nextItems.splice(fromIndex, 1);
+      let insertIndex = toIndex;
+      if (fromIndex < toIndex) {
+        insertIndex = Math.max(0, toIndex - 1);
+      }
+      insertIndex = Math.min(insertIndex, nextItems.length);
+      nextItems.splice(insertIndex, 0, moved);
+      const isSameOrder =
+        nextItems.length === playlist.items.length &&
+        nextItems.every((item, idx) => item === playlist.items[idx]);
+      if (isSameOrder) return;
+
       try {
-        baseConfig = await invoke<SyncplayConfig>("get_config");
+        await invoke("update_playlist", {
+          action: "reorder",
+          items: nextItems,
+        });
       } catch (error) {
         addNotification({
           type: "error",
-          message: "Failed to load config for dropped files",
+          message: "Failed to reorder playlist",
         });
-        return;
+      }
+    },
+    [addNotification, connection.connected, playlist.items]
+  );
+
+  const getDropIndex = useCallback((clientY: number) => {
+    const container = playlistContainerRef.current;
+    if (!container) return null;
+    const items = Array.from(container.querySelectorAll<HTMLElement>("[data-playlist-item]"));
+    if (items.length === 0) return null;
+    for (const item of items) {
+      const rect = item.getBoundingClientRect();
+      const midpoint = rect.top + rect.height / 2;
+      const index = Number(item.dataset.index);
+      if (Number.isNaN(index)) continue;
+      if (clientY < midpoint) {
+        return index;
       }
     }
+    return items.length;
+  }, []);
 
-    const mediaDirectories = baseConfig.player.media_directories.filter((dir) => dir.trim() !== "");
-    const normalizedDirs = mediaDirectories.map(normalizePath);
-    const rejected: string[] = [];
+  const scheduleDragGhostUpdate = useCallback((x: number, y: number) => {
+    if (dragGhostRafRef.current !== null) return;
+    dragGhostRafRef.current = window.requestAnimationFrame(() => {
+      dragGhostRafRef.current = null;
+      const dragState = dragStartRef.current;
+      if (!dragState?.active) return;
+      setDragGhost((prev) =>
+        prev
+          ? { ...prev, x, y }
+          : {
+              text: dragState.text,
+              width: dragState.width,
+              height: dragState.height,
+              x,
+              y,
+            }
+      );
+    });
+  }, []);
 
-    for (const path of paths) {
-      const normalizedFile = normalizePath(path);
-      const isInDirectory =
-        normalizedDirs.length > 0 &&
-        normalizedDirs.some((dir) => normalizedFile.startsWith(`${dir}/`));
-      const filename = isInDirectory ? path.split(/[/\\\\]/).pop() || path : path;
+  const handlePointerMove = useCallback(
+    (event: PointerEvent) => {
+      const dragState = dragStartRef.current;
+      if (!dragState) return;
+      if (!dragState.active) {
+        const deltaX = Math.abs(event.clientX - dragState.startX);
+        const deltaY = Math.abs(event.clientY - dragState.startY);
+        if (deltaX < 4 && deltaY < 4) {
+          return;
+        }
+        dragState.active = true;
+        setDraggingIndex(dragState.index);
+      }
+      const dropIndex = getDropIndex(event.clientY);
+      if (dropIndex !== null) {
+        dragOverIndexRef.current = dropIndex;
+      }
+      const nextX = event.clientX - dragState.offsetX;
+      const nextY = event.clientY - dragState.offsetY;
+      scheduleDragGhostUpdate(nextX, nextY);
+    },
+    [getDropIndex, scheduleDragGhostUpdate]
+  );
+
+  const handlePointerUp = useCallback(() => {
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+    const dragState = dragStartRef.current;
+    dragStartRef.current = null;
+    setDraggingIndex(null);
+    setDragGhost(null);
+    if (dragGhostRafRef.current !== null) {
+      window.cancelAnimationFrame(dragGhostRafRef.current);
+      dragGhostRafRef.current = null;
+    }
+    if (!dragState?.active) {
+      dragIndexRef.current = null;
+      dragOverIndexRef.current = null;
+      return;
+    }
+    const fromIndex = dragState.index;
+    const toIndex = dragOverIndexRef.current ?? fromIndex;
+    dragIndexRef.current = null;
+    dragOverIndexRef.current = null;
+    void handleReorderItems(fromIndex, toIndex);
+  }, [handlePointerMove, handleReorderItems]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlisten: (() => void) | null = null;
+
+    const setup = async () => {
       try {
-        await invoke("update_playlist", {
-          action: "add",
-          filename,
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent((event) => {
+          const payload = event.payload;
+          if (payload.type !== "drop" || payload.paths.length === 0) return;
+          void handleDropPaths(payload.paths);
         });
-      } catch (error) {
-        rejected.push(path);
-      }
-    }
+      } catch {}
+    };
 
-    if (rejected.length > 0) {
-      addNotification({
-        type: "warning",
-        message: `Skipped ${rejected.length} file(s) that could not be added`,
-      });
-    }
-  };
+    void setup();
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [handleDropPaths]);
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      if (dragGhostRafRef.current !== null) {
+        window.cancelAnimationFrame(dragGhostRafRef.current);
+        dragGhostRafRef.current = null;
+      }
+    };
+  }, [handlePointerMove, handlePointerUp]);
 
   const handleScanMediaDirectory = async () => {
     if (mediaIndexRefreshing) return;
@@ -423,6 +643,7 @@ export function PlaylistPanel() {
   return (
     <div className="flex flex-col h-full">
       {renderTooltip()}
+      {renderDragGhost()}
 
       {/* Header */}
       <div className="p-4 border-b app-divider app-surface rounded-t-2xl">
@@ -496,6 +717,7 @@ export function PlaylistPanel() {
 
       {/* Playlist items */}
       <div
+        ref={playlistContainerRef}
         className="flex-1 overflow-auto p-4"
         onDragOver={(event) => {
           event.preventDefault();
@@ -516,7 +738,7 @@ export function PlaylistPanel() {
                 const isCurrent =
                   normalizeFilename(player.filename) !== "" &&
                   normalizeFilename(player.filename) === normalizeFilename(item);
-                const tooltipText = resolvedPath ? `${item} • ${resolvedPath}` : item;
+                const tooltipText = resolvedPath ?? "";
                 return (
                   <div
                     key={index}
@@ -525,9 +747,34 @@ export function PlaylistPanel() {
                         void handlePlayItem(index);
                       }
                     }}
-                    className={`p-2 rounded-md text-sm ${
+                    className={`p-2 rounded-md text-sm select-none transition-transform transition-opacity duration-150 ${
                       isCurrent ? "app-item-playing" : "app-panel-muted group"
-                    }`}
+                    } ${draggingIndex === index ? "opacity-40 scale-[0.98]" : ""}`}
+                    data-playlist-item
+                    data-index={index}
+                    onPointerDown={(event) => {
+                      if (!connection.connected || playlist.items.length < 2) return;
+                      if (event.button !== 0) return;
+                      const target = event.target as HTMLElement | null;
+                      if (target?.closest("button")) return;
+                      event.preventDefault();
+                      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                      dragIndexRef.current = index;
+                      dragOverIndexRef.current = index;
+                      dragStartRef.current = {
+                        index,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        offsetX: event.clientX - rect.left,
+                        offsetY: event.clientY - rect.top,
+                        width: rect.width,
+                        height: rect.height,
+                        text: item,
+                        active: false,
+                      };
+                      window.addEventListener("pointermove", handlePointerMove);
+                      window.addEventListener("pointerup", handlePointerUp);
+                    }}
                   >
                     <div
                       className="relative flex items-center gap-2"

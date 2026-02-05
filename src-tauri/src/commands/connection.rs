@@ -366,7 +366,13 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
             state.emit_event("chat-message-received", chat_msg);
         }
         ProtocolMessage::State { State: state_msg } => {
-            tracing::info!("Received state update: {:?}", state_msg);
+            if state_msg.playstate.is_some() || state_msg.ignoring_on_the_fly.is_some() {
+                tracing::info!(
+                    "Received state update: playstate={:?}, ignoring_on_the_fly={:?}",
+                    state_msg.playstate.as_ref(),
+                    state_msg.ignoring_on_the_fly.as_ref()
+                );
+            }
             let mut message_age = 0.0;
             if let Some(ignore) = state_msg.ignoring_on_the_fly.as_ref() {
                 update_ignoring_on_the_fly(state, ignore);

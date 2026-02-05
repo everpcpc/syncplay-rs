@@ -12,7 +12,8 @@ export function UserList() {
   const addNotification = useNotificationStore((state) => state.addNotification);
   const [showRoomManager, setShowRoomManager] = useState(false);
 
-  const currentUser = users.find((user) => user.username === config?.user.username);
+  const currentUsername = config?.user.username ?? null;
+  const currentUser = users.find((user) => user.username === currentUsername);
   const isReady = currentUser?.isReady ?? false;
 
   const currentRoom = currentUser?.room ?? config?.user.default_room ?? "Room";
@@ -111,6 +112,12 @@ export function UserList() {
   const currentUserFile = currentUser?.file ?? null;
   const currentUserSize = currentUser?.fileSize;
   const currentUserDuration = currentUser?.fileDuration;
+  const sortedUsers = currentUsername
+    ? [
+        ...users.filter((user) => user.username === currentUsername),
+        ...users.filter((user) => user.username !== currentUsername),
+      ]
+    : users;
 
   return (
     <div className="flex flex-col h-full gap-2">
@@ -144,18 +151,21 @@ export function UserList() {
         </div>
       ) : (
         <div className="space-y-2 flex-1 overflow-auto pr-1">
-          {users.map((user) => (
+          {sortedUsers.map((user) => (
             <div key={user.username} className="app-panel-muted rounded-md p-3 text-sm">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">{user.username}</span>
                   <span
-                    className={`text-xs px-2.5 py-0.5 rounded-full ${
+                    className={`text-[10px] px-2 py-0 rounded-full ${
                       user.isReady ? "app-tag-success" : "app-tag-muted"
                     }`}
                   >
                     {user.isReady ? "Ready" : "Not Ready"}
                   </span>
+                  {currentUsername === user.username && (
+                    <span className="text-[10px] app-tag-accent px-2 py-0 rounded-full">You</span>
+                  )}
                 </div>
                 {user.isController && (
                   <span className="text-xs app-tag-accent px-2 py-0.5 rounded">Controller</span>

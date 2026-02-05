@@ -16,6 +16,7 @@ use tauri::State;
 pub async fn update_playlist(
     action: String,
     filename: Option<String>,
+    items: Option<Vec<String>>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     tracing::info!("Playlist action: {} for file: {:?}", action, filename);
@@ -115,6 +116,10 @@ pub async fn update_playlist(
                 return Err("Playlist file is empty".to_string());
             }
             apply_playlist_change_local(state.inner(), items, true)?;
+        }
+        "reorder" => {
+            let items = items.ok_or_else(|| "Items required for reorder action".to_string())?;
+            apply_playlist_change_local(state.inner(), items, false)?;
         }
         "save" => {
             let path = filename.ok_or_else(|| "Path required for save action".to_string())?;
