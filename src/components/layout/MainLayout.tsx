@@ -34,6 +34,7 @@ import {
   TransparencyPreference,
   normalizeTransparency,
 } from "../../services/theme";
+import { checkForUpdates, shouldAutoCheckUpdates } from "../../services/updater";
 import { SyncplayConfig } from "../../types/config";
 
 export function MainLayout() {
@@ -57,6 +58,7 @@ export function MainLayout() {
   const setConfig = useSyncplayStore((state) => state.setConfig);
   const addNotification = useNotificationStore((state) => state.addNotification);
   const initializedRef = useRef(false);
+  const autoUpdateCheckedRef = useRef(false);
   const showPlaylistRef = useRef<boolean | null>(null);
   const RESIZER_SIZE = 12;
   const GAP_SIZE = 12;
@@ -79,6 +81,27 @@ export function MainLayout() {
         const normalizedTransparency = normalizeTransparency(config.user.transparency_mode);
         setTransparencyMode(normalizedTransparency);
         applyTransparency(normalizedTransparency);
+
+        if (
+          !autoUpdateCheckedRef.current &&
+          shouldAutoCheckUpdates(config.user.check_for_updates_automatically)
+        ) {
+          autoUpdateCheckedRef.current = true;
+          const updateResult = await checkForUpdates();
+          if (updateResult.status === "available") {
+            addNotification({
+              type: "info",
+              message: `Update ${updateResult.update.version} available. Open Settings > Misc to install.`,
+            });
+            try {
+              await updateResult.update.close();
+            } catch (closeError) {
+              console.warn("Failed to close updater resource", closeError);
+            }
+          } else if (updateResult.status === "error") {
+            console.warn("Auto update check failed", updateResult.message);
+          }
+        }
 
         if (config.user.force_gui_prompt) {
           setShowConnectionDialog(true);

@@ -63,4 +63,4 @@ jobs:
       run: cd src-tauri && cargo fmt -- --check
 
     - name: Build Tauri app
-      run: pnpm run tauri build
+      run: pnpm tauri build --no-sign

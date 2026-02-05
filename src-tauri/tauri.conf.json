@@ -38,6 +38,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": [
       "resources/placeholder.png"
     ],
@@ -49,5 +50,12 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/everpcpc/syncplay-tauri/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk0NzVGOTVBNzZCRTg3QzcKUldUSGg3NTJXdmwxbEZGdlZqL1RrcGtJdXZJS0FFTkw3UitwWE1FaVgrK0RRdzNTUGxkbnU4OWUK"
+    }
+  }
 }
