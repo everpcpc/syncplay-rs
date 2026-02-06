@@ -28,6 +28,7 @@ use tempfile::Builder;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
 use tracing::info;
+use url::Url;
 
 const PROTOCOL_TIMEOUT_SECONDS: f64 = 12.5;
 const RECENT_REWIND_THRESHOLD_SECONDS: f64 = 5.0;
@@ -937,16 +938,25 @@ pub(crate) fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState
     }
     let config = state.config.lock().clone();
     let raw_path = player_state.path.clone();
+    let local_path = raw_path.as_deref().and_then(normalize_local_path);
     let raw_name = if let Some(path) = raw_path.as_deref() {
-        if is_url(path) {
-            Some(path.to_string())
+        if let Some(local_path) = local_path.as_ref() {
+            local_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+                .or_else(|| player_state.filename.clone())
         } else {
-            player_state.filename.clone().or_else(|| {
-                Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| name.to_string())
-            })
+            if is_url(path) {
+                Some(path.to_string())
+            } else {
+                player_state.filename.clone().or_else(|| {
+                    Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| name.to_string())
+                })
+            }
         }
     } else {
         let filename = player_state.filename.as_deref();
@@ -960,15 +970,13 @@ pub(crate) fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState
             return;
         }
     };
-    let raw_size = if let Some(path) = raw_path.as_deref() {
-        if is_url(path) {
-            Some(0)
-        } else {
-            match std::fs::metadata(path) {
-                Ok(metadata) => Some(metadata.len()),
-                Err(_) => Some(0),
-            }
+    let raw_size = if let Some(local_path) = local_path.as_ref() {
+        match std::fs::metadata(local_path) {
+            Ok(metadata) => Some(metadata.len()),
+            Err(_) => Some(0),
         }
+    } else if raw_path.as_deref().map(is_url).unwrap_or(false) {
+        Some(0)
     } else {
         raw_name.as_deref().filter(|name| is_url(name)).map(|_| 0)
     };
@@ -1029,6 +1037,57 @@ pub(crate) fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState
             }
         });
     }
+}
+
+fn normalize_local_path(raw_path: &str) -> Option<PathBuf> {
+    if raw_path.trim().is_empty() {
+        return None;
+    }
+    if raw_path.starts_with("file://") {
+        if let Ok(url) = Url::parse(raw_path) {
+            if url.scheme() == "file" {
+                if let Ok(path) = url.to_file_path() {
+                    return Some(path);
+                }
+            }
+        }
+        return decode_file_url_fallback(raw_path);
+    }
+    if is_url(raw_path) {
+        return None;
+    }
+    Some(PathBuf::from(raw_path))
+}
+
+fn decode_file_url_fallback(raw_path: &str) -> Option<PathBuf> {
+    let mut value = raw_path.trim_start_matches("file://");
+    if let Some(rest) = value.strip_prefix("localhost/") {
+        value = rest;
+    }
+    let decoded = urlencoding::decode(value).unwrap_or_else(|_| value.into());
+    let mut decoded = decoded.to_string();
+
+    if cfg!(windows) {
+        if decoded.starts_with("//") {
+            return Some(PathBuf::from(decoded));
+        }
+        if decoded.starts_with('/') {
+            let without = decoded.trim_start_matches('/');
+            if without.len() >= 2 && without.as_bytes()[1] == b':' {
+                return Some(PathBuf::from(without));
+            }
+            return Some(PathBuf::from(format!("//{}", without)));
+        }
+        if !decoded.contains(':') && decoded.contains('/') {
+            return Some(PathBuf::from(format!("//{}", decoded)));
+        }
+        return Some(PathBuf::from(decoded));
+    }
+
+    if !decoded.starts_with('/') {
+        decoded = format!("/{}", decoded);
+    }
+    Some(PathBuf::from(decoded))
 }
 
 pub(crate) async fn rewind_player(state: &Arc<AppState>) -> Result<(), String> {
