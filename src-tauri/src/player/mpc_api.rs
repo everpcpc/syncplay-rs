@@ -47,10 +47,11 @@ mod win {
     use std::sync::mpsc::{self, Receiver, Sender};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::DataExchange::COPYDATASTRUCT;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-        SendMessageW, SetWindowLongPtrW, COPYDATASTRUCT, CW_USEDEFAULT, GWLP_USERDATA, MSG,
+        SendMessageW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA, MSG,
         WM_COPYDATA, WNDCLASSW,
     };
 
