@@ -428,14 +428,15 @@ fn resolve_vlc_paths(player_path: &str) -> anyhow::Result<(String, String)> {
                 "{}/snap/vlc/current/.local/share/vlc/lua/intf/",
                 std::env::var("HOME").unwrap_or_default()
             );
-            return Ok((intf, user));
+            Ok((intf, user))
+        } else {
+            let intf = "/usr/lib/vlc/lua/intf/".to_string();
+            let user = format!(
+                "{}/.local/share/vlc/lua/intf/",
+                std::env::var("HOME").unwrap_or_default()
+            );
+            Ok((intf, user))
         }
-        let intf = "/usr/lib/vlc/lua/intf/".to_string();
-        let user = format!(
-            "{}/.local/share/vlc/lua/intf/",
-            std::env::var("HOME").unwrap_or_default()
-        );
-        return Ok((intf, user));
     }
 
     #[cfg(target_os = "macos")]
@@ -458,19 +459,20 @@ fn resolve_vlc_paths(player_path: &str) -> anyhow::Result<(String, String)> {
                 .unwrap_or_else(|| Path::new(""))
                 .to_path_buf();
             let intf = base.join("App/vlc/lua/intf/").to_string_lossy().to_string();
-            return Ok((intf.clone(), intf));
+            Ok((intf.clone(), intf))
+        } else {
+            let base = player_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf();
+            let intf = base.join("lua/intf/").to_string_lossy().to_string();
+            let appdata = std::env::var("APPDATA").unwrap_or_default();
+            let user = Path::new(&appdata)
+                .join("VLC/lua/intf/")
+                .to_string_lossy()
+                .to_string();
+            Ok((intf, user))
         }
-        let base = player_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .to_path_buf();
-        let intf = base.join("lua/intf/").to_string_lossy().to_string();
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        let user = Path::new(&appdata)
-            .join("VLC/lua/intf/")
-            .to_string_lossy()
-            .to_string();
-        return Ok((intf, user));
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
