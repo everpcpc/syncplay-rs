@@ -12,6 +12,8 @@ mod player;
 mod utils;
 
 use app_state::AppState;
+#[cfg(windows)]
+use tauri_plugin_frame::FramePluginBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
@@ -27,11 +29,15 @@ fn main() {
     // Create global app state
     let app_state = AppState::new();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    let builder = with_frame_plugin(builder);
+
+    builder
         .manage(app_state.clone())
         .setup(move |app| {
             // Store app handle for event emission
@@ -84,4 +90,20 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(windows)]
+fn with_frame_plugin<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.plugin(
+        FramePluginBuilder::new()
+            .titlebar_height(32)
+            .button_width(46)
+            .auto_titlebar(true)
+            .build(),
+    )
+}
+
+#[cfg(not(windows))]
+fn with_frame_plugin<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
 }
