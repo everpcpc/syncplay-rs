@@ -13,8 +13,7 @@ use super::properties::PlayerState;
 
 const MPLAYER_ARGS: &[&str] = &[
     "-slave",
-    "-idle",
-    "-quiet",
+    "--hr-seek=always",
     "-nomsgcolor",
     "-msglevel",
     "all=1:global=4:cplayer=4",

@@ -178,9 +178,10 @@ fn detect_mpc_be() -> Option<DetectedPlayer> {
 
 #[cfg(target_os = "macos")]
 fn detect_iina() -> Option<DetectedPlayer> {
-    let paths = vec![PathBuf::from(
-        "/Applications/IINA.app/Contents/MacOS/iina-cli",
-    )];
+    let paths = vec![
+        PathBuf::from("/Applications/IINA.app/Contents/MacOS/IINA"),
+        PathBuf::from("/Applications/IINA.app/Contents/MacOS/iina-cli"),
+    ];
 
     for path in paths {
         if path.exists() {
@@ -202,6 +203,7 @@ fn get_mpv_paths() -> Vec<PathBuf> {
     {
         paths.push(PathBuf::from("/usr/local/bin/mpv"));
         paths.push(PathBuf::from("/opt/homebrew/bin/mpv"));
+        paths.push(PathBuf::from("/opt/mpv/mpv"));
         paths.push(PathBuf::from("/Applications/mpv.app/Contents/MacOS/mpv"));
     }
 
@@ -209,12 +211,27 @@ fn get_mpv_paths() -> Vec<PathBuf> {
     {
         paths.push(PathBuf::from("/usr/bin/mpv"));
         paths.push(PathBuf::from("/usr/local/bin/mpv"));
+        paths.push(PathBuf::from("/opt/mpv/mpv"));
     }
 
     #[cfg(target_os = "windows")]
     {
         paths.push(PathBuf::from("C:\\Program Files\\mpv\\mpv.exe"));
+        paths.push(PathBuf::from("C:\\Program Files\\mpv-player\\mpv.exe"));
         paths.push(PathBuf::from("C:\\Program Files (x86)\\mpv\\mpv.exe"));
+        paths.push(PathBuf::from(
+            "C:\\Program Files (x86)\\mpv-player\\mpv.exe",
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            paths.push(PathBuf::from(format!(
+                "{}\\Microsoft\\WindowsApps\\mpv.exe",
+                local_appdata
+            )));
+        }
     }
 
     // Also check PATH
@@ -261,7 +278,10 @@ fn get_vlc_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         paths.push(PathBuf::from("/usr/bin/vlc"));
+        paths.push(PathBuf::from("/usr/bin/vlc-wrapper"));
         paths.push(PathBuf::from("/usr/local/bin/vlc"));
+        paths.push(PathBuf::from("/usr/local/bin/vlc-wrapper"));
+        paths.push(PathBuf::from("/snap/bin/vlc"));
     }
 
     #[cfg(target_os = "windows")]
@@ -324,20 +344,31 @@ fn get_mplayer_paths() -> Vec<PathBuf> {
 #[cfg(target_os = "windows")]
 fn get_mpc_hc_paths() -> Vec<PathBuf> {
     vec![
+        PathBuf::from("C:\\Program Files (x86)\\MPC-HC\\mpc-hc.exe"),
         PathBuf::from("C:\\Program Files\\MPC-HC\\mpc-hc.exe"),
         PathBuf::from("C:\\Program Files\\MPC-HC\\mpc-hc64.exe"),
-        PathBuf::from("C:\\Program Files (x86)\\MPC-HC\\mpc-hc.exe"),
-        PathBuf::from("C:\\Program Files\\MPC-HC\\mpc-hc64.exe"),
-        PathBuf::from("C:\\Program Files\\K-Lite Codec Pack\\MPC-HC\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\Media Player Classic - Home Cinema\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\Media Player Classic - Home Cinema\\mpc-hc64.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\Media Player Classic - Home Cinema\\mpc-hc.exe"),
         PathBuf::from("C:\\Program Files (x86)\\K-Lite Codec Pack\\MPC-HC\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\K-Lite Codec Pack\\Media Player Classic\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\K-Lite Codec Pack\\MPC-HC64\\mpc-hc64.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\K-Lite Codec Pack\\MPC-HC64\\mpc-hc64.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\Combined Community Codec Pack\\MPC\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\Combined Community Codec Pack\\MPC\\mpc-hc.exe"),
+        PathBuf::from("C:\\Program Files\\MPC HomeCinema (x64)\\mpc-hc64.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\LAV Filters\\x86\\mpc-hc\\shoukaku.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\LAV Filters\\x64\\mpc-hc\\shoukaku.exe"),
     ]
 }
 
 #[cfg(target_os = "windows")]
 fn get_mpc_be_paths() -> Vec<PathBuf> {
     vec![
-        PathBuf::from("C:\\Program Files\\MPC-BE\\mpc-be.exe"),
+        PathBuf::from("C:\\Program Files\\MPC-BE x64\\mpc-be64.exe"),
+        PathBuf::from("C:\\Program Files\\MPC-BE x64\\mpc-be.exe"),
         PathBuf::from("C:\\Program Files\\MPC-BE\\mpc-be64.exe"),
+        PathBuf::from("C:\\Program Files\\MPC-BE\\mpc-be.exe"),
         PathBuf::from("C:\\Program Files (x86)\\MPC-BE\\mpc-be.exe"),
     ]
 }
