@@ -167,6 +167,8 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
 
   const serverOptions = buildServerOptions(config?.recent_servers ?? [], config?.public_servers);
   const roomOptions = config?.user.room_list ?? [];
+  const playerPath = config?.player.player_path?.trim() ?? "";
+  const playerSelectionMissing = !playerPath || playerPath === "custom";
 
   useEffect(() => {
     if (!isOpen) return;
@@ -196,12 +198,25 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   }, [config?.player.player_arguments]);
 
   useEffect(() => {
+    if (!isOpen || !config) return;
+    if (playerSelectionMissing) {
+      setActiveTab("player");
+    }
+  }, [isOpen, config, playerSelectionMissing]);
+
+  useEffect(() => {
     if (!isOpen || activeTab !== "player") return;
     void (async () => {
       await loadPlayerCache();
       await refreshPlayers();
     })();
   }, [isOpen, activeTab]);
+
+  useEffect(() => {
+    if (!playerSelectionMissing && error === "Select a media player before connecting.") {
+      setError(null);
+    }
+  }, [playerSelectionMissing, error]);
 
   if (!isOpen) return null;
 
@@ -358,6 +373,11 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
   const handleConnect = async (saveConfig: boolean) => {
     if (!formData.username.trim()) {
       setError("Username is required");
+      return;
+    }
+    if (playerSelectionMissing) {
+      setError("Select a media player before connecting.");
+      setActiveTab("player");
       return;
     }
 
@@ -681,12 +701,18 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               </div>
             )}
 
+            {config && playerSelectionMissing && (
+              <div className="app-message px-4 py-2 text-sm">
+                Select a media player in the Player tab before connecting.
+              </div>
+            )}
+
             {error && <div className="app-alert app-alert-danger px-4 py-2 text-sm">{error}</div>}
 
             <div className="flex gap-2">
               <button
                 type="submit"
-                disabled={isConnecting}
+                disabled={isConnecting || playerSelectionMissing}
                 className="flex-1 btn-primary disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-md"
               >
                 {isConnecting ? "Connecting..." : "Connect"}
@@ -694,7 +720,7 @@ export function ConnectionDialog({ isOpen, onClose }: ConnectionDialogProps) {
               <button
                 type="button"
                 onClick={() => handleConnect(true)}
-                disabled={isConnecting}
+                disabled={isConnecting || playerSelectionMissing}
                 className="flex-1 btn-secondary disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 rounded-md"
               >
                 {isConnecting ? "Connecting..." : "Connect & Save"}

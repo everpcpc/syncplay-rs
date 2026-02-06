@@ -18,6 +18,9 @@ import {
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: SettingsTab;
+  appVersion?: string | null;
+  onUpdateAvailable?: (version: string | null) => void;
 }
 
 type SettingsTab = "sync" | "ready" | "privacy" | "chat" | "osd" | "misc";
@@ -66,11 +69,17 @@ const chatOutputModes: Array<{ label: string; value: ChatOutputMode }> = [
   { label: "Scrolling", value: "scrolling" },
 ];
 
-export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+export function SettingsDialog({
+  isOpen,
+  onClose,
+  initialTab,
+  appVersion,
+  onUpdateAvailable,
+}: SettingsDialogProps) {
   const [config, setConfig] = useState<SyncplayConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("sync");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "sync");
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutoSaveRef = useRef(true);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -96,6 +105,11 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     }
     loadConfig();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setActiveTab(initialTab ?? "sync");
+  }, [isOpen, initialTab]);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -147,20 +161,24 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       setUpdateMessage(
         `Update ${result.update.version} is available (current ${result.update.currentVersion}).`
       );
+      onUpdateAvailable?.(result.update.version);
       return;
     }
     if (result.status === "up-to-date") {
       setUpdateStatus("up-to-date");
       setUpdateMessage("You're already on the latest version.");
+      onUpdateAvailable?.(null);
       return;
     }
     if (result.status === "unsupported") {
       setUpdateStatus("unsupported");
       setUpdateMessage("Updates are only available in the desktop app.");
+      onUpdateAvailable?.(null);
       return;
     }
     setUpdateStatus("error");
     setUpdateMessage(result.message);
+    onUpdateAvailable?.(null);
   };
 
   const handleInstallUpdate = async () => {
@@ -1128,6 +1146,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                       <p className="text-xs app-text-muted">
                         Check for new releases and install without leaving the app.
                       </p>
+                      {appVersion && (
+                        <p className="text-xs app-text-muted">Current version {appVersion}</p>
+                      )}
                     </div>
                     <button
                       type="button"
