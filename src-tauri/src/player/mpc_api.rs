@@ -51,8 +51,7 @@ mod win {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-        SendMessageW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA, MSG,
-        WM_COPYDATA, WNDCLASSW,
+        SendMessageW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA, MSG, WM_COPYDATA, WNDCLASSW,
     };
 
     #[derive(Debug)]
