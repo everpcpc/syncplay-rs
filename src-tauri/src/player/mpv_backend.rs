@@ -19,6 +19,7 @@ use crate::app_state::AppState;
 use crate::commands::chat::send_chat_message_from_player;
 use crate::commands::connection::emit_error_message;
 use crate::player::controller::handle_end_of_file;
+use crate::player::controller::is_placeholder_file;
 use crate::player::controller::stop_player;
 
 pub struct MpvBackend {
@@ -118,6 +119,39 @@ impl MpvBackend {
             }
         });
     }
+
+    fn sync_file_loaded_state(&self) {
+        let Some(app_state) = self.state.upgrade() else {
+            return;
+        };
+        let state = self.ipc.get_state();
+        let has_file = state
+            .filename
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || state
+                .path
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+        let is_placeholder = is_placeholder_file(&app_state, &state);
+        let next_loaded = has_file && !is_placeholder;
+        let was_loaded = self.file_loaded.load(Ordering::SeqCst);
+
+        if next_loaded == was_loaded {
+            return;
+        }
+
+        self.file_loaded.store(next_loaded, Ordering::SeqCst);
+        if next_loaded {
+            *self.last_loaded.lock() = Some(Instant::now());
+            self.ipc.set_ready(true);
+        } else {
+            *self.last_loaded.lock() = None;
+            self.ipc.set_ready(false);
+        }
+    }
 }
 
 #[async_trait]
@@ -174,6 +208,10 @@ impl PlayerBackend for MpvBackend {
         let cmd =
             MpvCommand::script_message_to("syncplayintf", "get_paused_and_position", Vec::new());
         let _ = self.ipc.send_command_async(cmd).await;
+        if let Err(err) = self.ipc.refresh_state().await {
+            warn!("Failed to refresh mpv properties: {}", err);
+        }
+        self.sync_file_loaded_state();
         Ok(())
     }
 

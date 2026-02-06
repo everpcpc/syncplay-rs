@@ -262,15 +262,41 @@ impl MpvIpc {
             PropertyId::Path,
             PropertyId::Speed,
         ];
+        let mut duration_missing = false;
 
         for prop in properties {
             let cmd = MpvCommand::get_property(prop.property_name(), 0);
             let response = self.send_command_async(cmd).await?;
             if let Some(data) = response.data {
+                if prop == PropertyId::Duration && data.is_null() {
+                    duration_missing = true;
+                    self.state.lock().update_property(prop, &data);
+                    continue;
+                }
                 if prop == PropertyId::TimePos && !data.is_null() {
                     *self.last_position_update.lock() = Some(Instant::now());
                 }
                 self.state.lock().update_property(prop, &data);
+            } else if prop == PropertyId::Duration {
+                duration_missing = true;
+            }
+        }
+
+        if duration_missing {
+            let cmd = MpvCommand::get_property("length", 0);
+            let mut updated = false;
+            if let Ok(response) = self.send_command_async(cmd).await {
+                if let Some(data) = response.data {
+                    if !data.is_null() {
+                        self.state
+                            .lock()
+                            .update_property(PropertyId::Duration, &data);
+                        updated = true;
+                    }
+                }
+            }
+            if !updated {
+                self.state.lock().duration = Some(0.0);
             }
         }
 
