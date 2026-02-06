@@ -56,6 +56,14 @@ fn main() {
                     }
                 }
             }
+            #[cfg(windows)]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(err) = window.set_decorations(false) {
+                        tracing::warn!("Failed to disable window decorations on Windows: {}", err);
+                    }
+                }
+            }
             let config = crate::config::load_config(app.handle()).unwrap_or_else(|e| {
                 tracing::error!("Failed to load config: {}", e);
                 crate::config::SyncplayConfig::default()
