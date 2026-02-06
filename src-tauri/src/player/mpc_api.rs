@@ -80,6 +80,7 @@ mod win {
             let mpc_handle_clone = mpc_handle.clone();
             let (hwnd_tx, hwnd_rx) = mpsc::channel::<anyhow::Result<isize>>();
 
+            let event_tx = tx.clone();
             std::thread::spawn(move || unsafe {
                 let result = (|| -> anyhow::Result<isize> {
                     let class_name = widestr("MPCApiListener");
@@ -108,7 +109,7 @@ mod win {
                     );
                     let hwnd = hwnd?;
                     let boxed = Box::new(MpcListenerState {
-                        tx: tx.clone(),
+                        tx: event_tx.clone(),
                         mpc_handle: mpc_handle_clone,
                     });
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
@@ -186,8 +187,8 @@ mod win {
                 SendMessageW(
                     mpc_handle,
                     WM_COPYDATA,
-                    WPARAM(self.hwnd_raw as usize),
-                    LPARAM(&cds as *const _ as isize),
+                    Some(WPARAM(self.hwnd_raw as usize)),
+                    Some(LPARAM(&cds as *const _ as isize)),
                 );
             }
             Ok(())
