@@ -10,9 +10,6 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-#[cfg(windows)]
-use windows::Win32::Foundation::HWND;
-
 const MPC_OPEN_MAX_WAIT_TIME: Duration = Duration::from_secs(10);
 const MPC_LOCK_WAIT_TIME: Duration = Duration::from_millis(200);
 const MPC_RETRY_WAIT_TIME: Duration = Duration::from_millis(10);
@@ -60,7 +57,7 @@ mod win {
 
     #[derive(Debug)]
     pub enum MpcEvent {
-        Connected(HWND),
+        Connected(isize),
         LoadState(i32),
         PlayState(i32),
         NowPlaying(String),
@@ -71,7 +68,7 @@ mod win {
     }
 
     pub struct MpcListener {
-        hwnd: HWND,
+        hwnd_raw: isize,
         mpc_handle: Arc<AtomicIsize>,
         event_tx: Sender<MpcEvent>,
     }
@@ -81,16 +78,16 @@ mod win {
             let (tx, rx) = mpsc::channel();
             let mpc_handle = Arc::new(AtomicIsize::new(0));
             let mpc_handle_clone = mpc_handle.clone();
-            let (hwnd_tx, hwnd_rx) = mpsc::channel::<anyhow::Result<HWND>>();
+            let (hwnd_tx, hwnd_rx) = mpsc::channel::<anyhow::Result<isize>>();
 
             std::thread::spawn(move || unsafe {
-                let result = (|| -> anyhow::Result<HWND> {
+                let result = (|| -> anyhow::Result<isize> {
                     let class_name = widestr("MPCApiListener");
                     let title = widestr("MPC Listener");
                     let hinstance = GetModuleHandleW(PCWSTR(null()))?;
                     let wc = WNDCLASSW {
                         lpfnWndProc: Some(wndproc),
-                        hInstance: hinstance,
+                        hInstance: hinstance.into(),
                         lpszClassName: PCWSTR(class_name.as_ptr()),
                         ..Default::default()
                     };
@@ -104,27 +101,25 @@ mod win {
                         0,
                         0,
                         0,
-                        HWND(0),
                         None,
-                        hinstance,
+                        None,
+                        Some(hinstance.into()),
                         None,
                     );
-                    if hwnd.0 == 0 {
-                        anyhow::bail!("Failed to create MPC listener window");
-                    }
+                    let hwnd = hwnd?;
                     let boxed = Box::new(MpcListenerState {
                         tx: tx.clone(),
                         mpc_handle: mpc_handle_clone,
                     });
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
-                    Ok(hwnd)
+                    Ok(hwnd.0 as isize)
                 })();
 
                 match result {
-                    Ok(hwnd) => {
-                        let _ = hwnd_tx.send(Ok(hwnd));
+                    Ok(hwnd_raw) => {
+                        let _ = hwnd_tx.send(Ok(hwnd_raw));
                         let mut msg = MSG::default();
-                        while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                        while GetMessageW(&mut msg, None, 0, 0).into() {
                             DispatchMessageW(&msg);
                         }
                     }
@@ -134,12 +129,12 @@ mod win {
                 }
             });
 
-            let hwnd = hwnd_rx
+            let hwnd_raw = hwnd_rx
                 .recv()
                 .map_err(|_| anyhow::anyhow!("Failed to create MPC listener window"))??;
             Ok((
                 Self {
-                    hwnd,
+                    hwnd_raw,
                     mpc_handle,
                     event_tx: tx,
                 },
@@ -148,20 +143,29 @@ mod win {
         }
 
         pub fn hwnd(&self) -> HWND {
-            self.hwnd
+            HWND(self.hwnd_raw as *mut std::ffi::c_void)
+        }
+
+        pub fn hwnd_raw(&self) -> isize {
+            self.hwnd_raw
         }
 
         pub fn set_mpc_handle(&self, hwnd: HWND) {
             self.mpc_handle.store(hwnd.0 as isize, Ordering::SeqCst);
         }
 
-        pub fn mpc_handle(&self) -> Option<HWND> {
+        pub fn mpc_handle_raw(&self) -> Option<isize> {
             let raw = self.mpc_handle.load(Ordering::SeqCst);
             if raw == 0 {
                 None
             } else {
-                Some(HWND(raw))
+                Some(raw)
             }
+        }
+
+        pub fn mpc_handle(&self) -> Option<HWND> {
+            self.mpc_handle_raw()
+                .map(|raw| HWND(raw as *mut std::ffi::c_void))
         }
 
         pub fn send_command(
@@ -182,7 +186,7 @@ mod win {
                 SendMessageW(
                     mpc_handle,
                     WM_COPYDATA,
-                    WPARAM(self.hwnd.0 as usize),
+                    WPARAM(self.hwnd_raw as usize),
                     LPARAM(&cds as *const _ as isize),
                 );
             }
@@ -214,7 +218,7 @@ mod win {
                 CMD_CONNECT => {
                     if let Ok(handle) = value.trim().parse::<isize>() {
                         state.mpc_handle.store(handle, Ordering::SeqCst);
-                        let _ = state.tx.send(MpcEvent::Connected(HWND(handle)));
+                        let _ = state.tx.send(MpcEvent::Connected(handle));
                     }
                 }
                 CMD_STATE => {
@@ -437,7 +441,7 @@ impl MpcApiBackend {
         let mut full_args = Vec::new();
         full_args.extend(args.iter().cloned());
         full_args.push("/slave".to_string());
-        full_args.push(listener.hwnd().0.to_string());
+        full_args.push(listener.hwnd_raw().to_string());
         cmd.args(&full_args);
         if let Some(path) = initial_file {
             cmd.arg(path);
@@ -456,8 +460,8 @@ impl MpcApiBackend {
 
         spawn_event_loop(
             event_rx,
-            listener.hwnd(),
-            listener.mpc_handle(),
+            listener.hwnd_raw(),
+            listener.mpc_handle_raw(),
             state.clone(),
             file_ready.clone(),
             switch_pause_calls.clone(),
@@ -638,8 +642,8 @@ impl PlayerBackend for MpcApiBackend {
 #[cfg(windows)]
 fn spawn_event_loop(
     event_rx: std::sync::mpsc::Receiver<MpcEvent>,
-    listener_hwnd: HWND,
-    _mpc_handle: Option<HWND>,
+    listener_hwnd: isize,
+    _mpc_handle: Option<isize>,
     state: Arc<Mutex<PlayerState>>,
     file_ready: Arc<AtomicBool>,
     switch_pause_calls: Arc<AtomicBool>,
@@ -651,7 +655,7 @@ fn spawn_event_loop(
         for event in event_rx {
             match event {
                 MpcEvent::Connected(hwnd) => {
-                    debug!("MPC connected: {:?} (listener {:?})", hwnd, listener_hwnd);
+                    debug!("MPC connected: {} (listener {})", hwnd, listener_hwnd);
                 }
                 MpcEvent::LoadState(state_code) => {
                     let ready = !matches!(state_code, 0 | 1 | 3);
