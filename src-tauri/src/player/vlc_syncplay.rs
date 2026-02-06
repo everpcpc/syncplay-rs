@@ -418,6 +418,7 @@ fn build_vlc_extra_args(player_path: &str) -> Vec<String> {
 
 #[allow(unused_variables)]
 fn resolve_vlc_paths(player_path: &str) -> anyhow::Result<(String, String)> {
+    let player_path_str = player_path;
     let player_path = Path::new(player_path);
     #[cfg(target_os = "linux")]
     {
