@@ -357,6 +357,9 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 }
                 crate::network::messages::ChatMessage::Text(message) => (None, message),
             };
+            if let Some(player) = state.player.lock().clone() {
+                let _ = player.show_chat_message(username.as_deref(), &message);
+            }
             let chat_msg = serde_json::json!({
                 "timestamp": chrono::Utc::now().to_rfc3339(),
                 "username": username,
@@ -450,6 +453,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
 
     let player = state.player.lock().clone();
     let Some(player) = player else { return };
+    let player_kind = player.kind();
     let mut player_state: PlayerState = player.get_state();
     let (local_position, local_paused) = match (player_state.position, player_state.paused) {
         (Some(pos), Some(paused)) => (pos, paused),
@@ -558,7 +562,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         }
     }
 
-    if slowdown_action {
+    if slowdown_action && player_supports_speed(player_kind) {
         if actor_name != current_username {
             if let Err(e) = player.set_speed(slowdown_rate).await {
                 tracing::warn!("Failed to set slowdown: {}", e);
@@ -573,7 +577,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         }
     }
 
-    if reset_speed {
+    if reset_speed && player_supports_speed(player_kind) {
         if let Err(e) = player.set_speed(1.0).await {
             tracing::warn!("Failed to reset speed: {}", e);
         } else {
@@ -752,6 +756,10 @@ fn should_allow_fastforward(state: &Arc<AppState>, config: &crate::config::Syncp
     }
     let can_control = current_user_can_control(state);
     !can_control
+}
+
+fn player_supports_speed(kind: crate::player::backend::PlayerKind) -> bool {
+    !matches!(kind, crate::player::backend::PlayerKind::MpcHc | crate::player::backend::PlayerKind::MpcBe)
 }
 
 pub(crate) fn emit_error_message(state: &Arc<AppState>, message: &str) {

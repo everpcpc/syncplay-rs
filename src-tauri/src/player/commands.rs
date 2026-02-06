@@ -146,4 +146,18 @@ impl MpvCommand {
             request_id: None,
         }
     }
+
+    /// Create a script-message-to command
+    pub fn script_message_to(target: &str, message: &str, args: Vec<Value>) -> Self {
+        let mut command = vec![
+            Value::String("script-message-to".to_string()),
+            Value::String(target.to_string()),
+            Value::String(message.to_string()),
+        ];
+        command.extend(args);
+        Self {
+            command,
+            request_id: None,
+        }
+    }
 }

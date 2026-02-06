@@ -16,6 +16,17 @@ pub async fn send_chat_message(
     message: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    send_chat_message_inner(state.inner(), &message).await
+}
+
+pub async fn send_chat_message_from_player(
+    state: &Arc<AppState>,
+    message: &str,
+) -> Result<(), String> {
+    send_chat_message_inner(state, message).await
+}
+
+async fn send_chat_message_inner(state: &Arc<AppState>, message: &str) -> Result<(), String> {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -37,12 +48,10 @@ pub async fn send_chat_message(
     let message = truncate_text(trimmed, max_length);
     tracing::info!("Sending chat message: {}", message);
 
-    // Check if connected
     if !state.is_connected() {
         return Err("Not connected to server".to_string());
     }
 
-    // Check if it's a command
     if let Some(command) = ChatCommand::parse(&message) {
         match command {
             ChatCommand::Room(room) => {
@@ -57,7 +66,7 @@ pub async fn send_chat_message(
                     parse_controlled_room_input(&trimmed_room);
                 let room = normalized_room;
                 if let Some(password) = control_password {
-                    store_control_password(state.inner(), &room, &password, true);
+                    store_control_password(state, &room, &password, true);
                 }
                 state.client_state.set_room(room);
                 let set_msg = ProtocolMessage::Set {
@@ -76,9 +85,9 @@ pub async fn send_chat_message(
                         features: None,
                     }),
                 };
-                send_to_server(&state, set_msg)?;
-                send_to_server(&state, ProtocolMessage::List { List: None })?;
-                reidentify_as_controller(state.inner());
+                send_to_server_arc(state, set_msg)?;
+                send_to_server_arc(state, ProtocolMessage::List { List: None })?;
+                reidentify_as_controller(state);
             }
             ChatCommand::List => {
                 tracing::info!("Command: List users");
@@ -138,7 +147,7 @@ pub async fn send_chat_message(
                         features: None,
                     }),
                 };
-                send_to_server(&state, set_msg)?;
+                send_to_server_arc(state, set_msg)?;
             }
             ChatCommand::Unready => {
                 tracing::info!("Command: Set unready");
@@ -165,7 +174,7 @@ pub async fn send_chat_message(
                         features: None,
                     }),
                 };
-                send_to_server(&state, set_msg)?;
+                send_to_server_arc(state, set_msg)?;
             }
             ChatCommand::SetReady(username) => {
                 tracing::info!("Command: Set other user ready");
@@ -190,7 +199,7 @@ pub async fn send_chat_message(
                         features: None,
                     }),
                 };
-                send_to_server(&state, set_msg)?;
+                send_to_server_arc(state, set_msg)?;
             }
             ChatCommand::SetNotReady(username) => {
                 tracing::info!("Command: Set other user not ready");
@@ -215,7 +224,7 @@ pub async fn send_chat_message(
                         features: None,
                     }),
                 };
-                send_to_server(&state, set_msg)?;
+                send_to_server_arc(state, set_msg)?;
             }
             ChatCommand::Unknown(msg) => {
                 tracing::warn!("Unknown command: {}", msg);
@@ -234,11 +243,10 @@ pub async fn send_chat_message(
         }
         Ok(())
     } else {
-        // Regular chat message
         let chat_msg = ProtocolMessage::Chat {
             Chat: ProtocolChatMessage::Text(message.clone()),
         };
-        send_to_server(&state, chat_msg)?;
+        send_to_server_arc(state, chat_msg)?;
         Ok(())
     }
 }
@@ -247,6 +255,16 @@ fn send_to_server(
     state: &State<'_, Arc<AppState>>,
     message: ProtocolMessage,
 ) -> Result<(), String> {
+    let connection = state.connection.lock().clone();
+    let Some(connection) = connection else {
+        return Err("Not connected to server".to_string());
+    };
+    connection
+        .send(message)
+        .map_err(|e| format!("Failed to send message: {}", e))
+}
+
+fn send_to_server_arc(state: &Arc<AppState>, message: ProtocolMessage) -> Result<(), String> {
     let connection = state.connection.lock().clone();
     let Some(connection) = connection else {
         return Err("Not connected to server".to_string());
