@@ -444,6 +444,9 @@ pub async fn load_media_by_name(
             .lock()
             .clone()
             .ok_or_else(|| "Player not connected".to_string())?;
+        if reset_position {
+            player.mark_reset(true);
+        }
         player
             .load_file(filename)
             .await
@@ -476,6 +479,9 @@ pub async fn load_media_by_name(
         .lock()
         .clone()
         .ok_or_else(|| "Player not connected".to_string())?;
+    if reset_position {
+        player.mark_reset(false);
+    }
     player
         .load_file(media_path.to_string_lossy().as_ref())
         .await

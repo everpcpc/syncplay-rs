@@ -28,6 +28,7 @@ pub struct MpvBackend {
     state: Weak<AppState>,
     file_loaded: Arc<AtomicBool>,
     last_loaded: Arc<Mutex<Option<Instant>>>,
+    reset_ignore_until: Arc<Mutex<Option<Instant>>>,
     osc_visibility_change_compatible: bool,
 }
 
@@ -37,6 +38,12 @@ const PLAYER_ASK_DELAY: Duration = Duration::from_millis(100);
 const MPV_UNRESPONSIVE_THRESHOLD: Duration = Duration::from_secs(60);
 const DO_NOT_RESET_POSITION_THRESHOLD: f64 = 1.0;
 const MPV_INPUT_BACKSLASH_SUBSTITUTE: &str = "＼";
+const MPV_ERROR_MESSAGES_TO_REPEAT: [&str; 4] = [
+    "[ytdl_hook] Your version of youtube-dl is too old",
+    "[ytdl_hook] youtube-dl failed",
+    "Failed to recognize file format.",
+    "[syncplayintf] Lua error",
+];
 
 impl MpvBackend {
     pub fn new(
@@ -52,6 +59,7 @@ impl MpvBackend {
             state,
             file_loaded: Arc::new(AtomicBool::new(false)),
             last_loaded: Arc::new(Mutex::new(None)),
+            reset_ignore_until: Arc::new(Mutex::new(None)),
             osc_visibility_change_compatible,
         };
         if let Some(stdout) = stdout {
@@ -69,6 +77,7 @@ impl MpvBackend {
         let state = self.state.clone();
         let file_loaded = self.file_loaded.clone();
         let last_loaded = self.last_loaded.clone();
+        let reset_ignore_until = self.reset_ignore_until.clone();
         let osc_visibility_change_compatible = self.osc_visibility_change_compatible;
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
@@ -86,6 +95,7 @@ impl MpvBackend {
                             &state,
                             &file_loaded,
                             &last_loaded,
+                            &reset_ignore_until,
                             osc_visibility_change_compatible,
                             &line,
                         )
@@ -102,6 +112,7 @@ impl MpvBackend {
         let state = self.state.clone();
         let file_loaded = self.file_loaded.clone();
         let last_loaded = self.last_loaded.clone();
+        let reset_ignore_until = self.reset_ignore_until.clone();
         let osc_visibility_change_compatible = self.osc_visibility_change_compatible;
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
@@ -112,6 +123,7 @@ impl MpvBackend {
                     &state,
                     &file_loaded,
                     &last_loaded,
+                    &reset_ignore_until,
                     osc_visibility_change_compatible,
                     &line,
                 )
@@ -152,6 +164,14 @@ impl MpvBackend {
             self.ipc.set_ready(false);
         }
     }
+
+    fn recently_reset(&self) -> bool {
+        let guard = self.reset_ignore_until.lock();
+        let Some(until) = guard.as_ref() else {
+            return false;
+        };
+        Instant::now() < *until
+    }
 }
 
 #[async_trait]
@@ -168,7 +188,7 @@ impl PlayerBackend for MpvBackend {
         let mut state = self.ipc.get_state();
         let is_loaded = self.file_loaded.load(Ordering::SeqCst);
         if let Some(app_state) = self.state.upgrade() {
-            if !is_loaded || recently_reset(&app_state, &state) {
+            if !is_loaded || self.recently_reset() {
                 let global = app_state.client_state.get_global_state();
                 state.position = Some(global.position);
                 state.paused = Some(global.paused);
@@ -216,12 +236,8 @@ impl PlayerBackend for MpvBackend {
     }
 
     async fn set_position(&self, position: f64) -> anyhow::Result<()> {
-        if let Some(app_state) = self.state.upgrade() {
-            if position < DO_NOT_RESET_POSITION_THRESHOLD
-                && recently_reset(&app_state, &self.ipc.get_state())
-            {
-                return Ok(());
-            }
+        if position < DO_NOT_RESET_POSITION_THRESHOLD && self.recently_reset() {
+            return Ok(());
         }
         self.ipc.set_position(position).await
     }
@@ -236,6 +252,14 @@ impl PlayerBackend for MpvBackend {
 
     async fn load_file(&self, path: &str) -> anyhow::Result<()> {
         self.ipc.load_file(path).await
+    }
+
+    fn mark_reset(&self, is_stream: bool) {
+        let mut until = Instant::now() + MPV_NEWFILE_IGNORE_TIME;
+        if is_stream {
+            until += STREAM_ADDITIONAL_IGNORE_TIME;
+        }
+        *self.reset_ignore_until.lock() = Some(until);
     }
 
     fn show_osd(&self, text: &str, duration_ms: Option<u64>) -> anyhow::Result<()> {
@@ -286,6 +310,7 @@ async fn handle_syncplayintf_line(
     state: &Weak<AppState>,
     file_loaded: &Arc<AtomicBool>,
     last_loaded: &Arc<Mutex<Option<Instant>>>,
+    reset_ignore_until: &Arc<Mutex<Option<Instant>>>,
     osc_visibility_change_compatible: bool,
     line: &str,
 ) {
@@ -300,6 +325,14 @@ async fn handle_syncplayintf_line(
         return;
     }
     debug!("mpv >> {}", line);
+    if MPV_ERROR_MESSAGES_TO_REPEAT
+        .iter()
+        .any(|message| line.contains(message))
+    {
+        if let Some(state) = state.upgrade() {
+            emit_error_message(&state, line);
+        }
+    }
     if line.contains("Failed to get value of property") || line.contains("=(unavailable)") {
         let ipc = ipc.clone();
         tokio::spawn(async move {
@@ -357,9 +390,14 @@ async fn handle_syncplayintf_line(
         ipc.set_ready(true);
         if let Some(app_state) = state.upgrade() {
             let ipc = ipc.clone();
+            let reset_ignore_until = Arc::clone(reset_ignore_until);
             tokio::spawn(async move {
-                let current = ipc.get_state();
-                if recently_reset(&app_state, &current) {
+                let ignore_until = *reset_ignore_until.lock();
+                if ignore_until
+                    .as_ref()
+                    .map(|until| Instant::now() < *until)
+                    .unwrap_or(false)
+                {
                     return;
                 }
                 let global = app_state.client_state.get_global_state();
@@ -394,6 +432,25 @@ async fn handle_syncplayintf_line(
     }
     if line.contains("Error parsing option") || line.contains("Error parsing commandline option") {
         warn!("mpv reported an option parsing error: {}", line);
+        if let Some(state) = state.upgrade() {
+            emit_error_message(
+                &state,
+                "This version of mpv is not compatible with Syncplay. Please use mpv >= 0.23.0.",
+            );
+        }
+        ipc.set_ready(true);
+    }
+    if line.contains("Could not open pipe at '/dev/stdin'") {
+        if let Some(state) = state.upgrade() {
+            emit_error_message(
+                &state,
+                "This version of mpv is not compatible with Syncplay. Please use mpv >= 0.23.0.",
+            );
+            let app_state_clone = state.clone();
+            tokio::spawn(async move {
+                let _ = stop_player(&app_state_clone).await;
+            });
+        }
         ipc.set_ready(true);
     }
     if line.contains("Failed")
@@ -576,27 +633,6 @@ async fn apply_osd_position(ipc: &Arc<MpvIpc>, state: &Arc<AppState>) {
             0,
         ))
         .await;
-}
-
-fn recently_reset(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
-    let Some(last_rewind) = *state.last_rewind_time.lock() else {
-        return false;
-    };
-    let mut ignore = MPV_NEWFILE_IGNORE_TIME;
-    if let Some(path) = player_state
-        .path
-        .as_deref()
-        .or(player_state.filename.as_deref())
-    {
-        if is_url(path) {
-            ignore += STREAM_ADDITIONAL_IGNORE_TIME;
-        }
-    }
-    last_rewind.elapsed() < ignore
-}
-
-fn is_url(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
 }
 
 fn sanitize_mpv_text(input: &str) -> String {

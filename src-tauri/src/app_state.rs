@@ -70,6 +70,18 @@ pub struct AppState {
     pub last_paused_on_leave_time: Arc<Mutex<Option<Instant>>>,
     /// Whether we should restore playlist on reconnect
     pub playlist_may_need_restoring: Arc<Mutex<bool>>,
+    /// Whether client TLS is supported
+    pub client_supports_tls: Arc<Mutex<bool>>,
+    /// Whether server TLS is supported
+    pub server_supports_tls: Arc<Mutex<bool>>,
+    /// Reconnect state
+    pub reconnect_state: Arc<Mutex<ReconnectState>>,
+    /// Last connection snapshot for reconnect
+    pub reconnect_snapshot: Arc<Mutex<Option<ConnectionSnapshot>>>,
+    /// Whether disconnect was initiated by user
+    pub manual_disconnect: Arc<Mutex<bool>>,
+    /// Warning timers for OSD warnings
+    pub warning_timers: Arc<Mutex<WarningTimers>>,
     /// Whether the first playlist index has been received
     pub had_first_playlist_index: Arc<Mutex<bool>>,
     /// Last time a player process was spawned
@@ -104,6 +116,35 @@ pub struct IgnoringOnTheFlyState {
     pub client: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConnectionSnapshot {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub room: String,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReconnectState {
+    pub enabled: bool,
+    pub running: bool,
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WarningTimerState {
+    pub active: bool,
+    pub displayed_for: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WarningTimers {
+    pub alone: WarningTimerState,
+    pub file_differences: WarningTimerState,
+    pub not_ready: WarningTimerState,
+}
+
 impl AppState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -133,6 +174,12 @@ impl AppState {
             last_updated_file_time: Arc::new(Mutex::new(None)),
             last_paused_on_leave_time: Arc::new(Mutex::new(None)),
             playlist_may_need_restoring: Arc::new(Mutex::new(false)),
+            client_supports_tls: Arc::new(Mutex::new(true)),
+            server_supports_tls: Arc::new(Mutex::new(true)),
+            reconnect_state: Arc::new(Mutex::new(ReconnectState::default())),
+            reconnect_snapshot: Arc::new(Mutex::new(None)),
+            manual_disconnect: Arc::new(Mutex::new(false)),
+            warning_timers: Arc::new(Mutex::new(WarningTimers::default())),
             had_first_playlist_index: Arc::new(Mutex::new(false)),
             last_player_spawn: Arc::new(Mutex::new(None)),
             last_player_kind: Arc::new(Mutex::new(None)),
@@ -207,6 +254,12 @@ impl Default for AppState {
             last_updated_file_time: Arc::new(Mutex::new(None)),
             last_paused_on_leave_time: Arc::new(Mutex::new(None)),
             playlist_may_need_restoring: Arc::new(Mutex::new(false)),
+            client_supports_tls: Arc::new(Mutex::new(true)),
+            server_supports_tls: Arc::new(Mutex::new(true)),
+            reconnect_state: Arc::new(Mutex::new(ReconnectState::default())),
+            reconnect_snapshot: Arc::new(Mutex::new(None)),
+            manual_disconnect: Arc::new(Mutex::new(false)),
+            warning_timers: Arc::new(Mutex::new(WarningTimers::default())),
             had_first_playlist_index: Arc::new(Mutex::new(false)),
             last_player_spawn: Arc::new(Mutex::new(None)),
             last_player_kind: Arc::new(Mutex::new(None)),

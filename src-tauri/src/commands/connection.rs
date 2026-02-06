@@ -1,6 +1,9 @@
 // Connection command handlers
 
-use crate::app_state::{AppState, ConnectionStatusEvent, ServerFeatures};
+use crate::app_state::{
+    AppState, ConnectionSnapshot, ConnectionStatusEvent, ServerFeatures, WarningTimerState,
+    WarningTimers,
+};
 use crate::commands::playlist::apply_playlist_index_from_server;
 use crate::config::{save_config, ServerConfig};
 use crate::network::connection::Connection;
@@ -20,13 +23,18 @@ use crate::utils::{
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime, State};
+use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, Duration};
 
 const AUTOPLAY_DELAY_SECONDS: i32 = 3;
 const DIFFERENT_DURATION_THRESHOLD: f64 = 2.5;
 const WARNING_OSD_INTERVAL_SECONDS: u64 = 1;
+const OSD_WARNING_MESSAGE_DURATION_SECONDS: u32 = 5;
 const OSD_MESSAGE_SEPARATOR: &str = "; ";
 const LAST_PAUSED_DIFF_THRESHOLD_SECONDS: f64 = 2.0;
+const RECONNECT_RETRIES: u32 = 999;
+const RECONNECT_BASE_DELAY_SECONDS: f64 = 0.1;
+const RECONNECT_MAX_EXPONENT: u32 = 5;
 const CONTROLLED_ROOMS_MIN_VERSION: &str = "1.3.0";
 const USER_READY_MIN_VERSION: &str = "1.3.0";
 const SHARED_PLAYLIST_MIN_VERSION: &str = "1.4.0";
@@ -37,14 +45,6 @@ const FALLBACK_MAX_CHAT_MESSAGE_LENGTH: usize = 50;
 const FALLBACK_MAX_USERNAME_LENGTH: usize = 16;
 const FALLBACK_MAX_ROOM_NAME_LENGTH: usize = 35;
 const FALLBACK_MAX_FILENAME_LENGTH: usize = 250;
-
-struct ConnectionSnapshot<'a> {
-    host: &'a str,
-    port: u16,
-    username: &'a str,
-    room: &'a str,
-    password: Option<&'a str>,
-}
 
 fn update_server_features(
     state: &Arc<AppState>,
@@ -116,6 +116,250 @@ fn update_server_features(
     }
 }
 
+struct EstablishedConnection {
+    connection: Arc<Connection>,
+    receiver: mpsc::UnboundedReceiver<ProtocolMessage>,
+}
+
+async fn establish_connection(
+    state: &Arc<AppState>,
+    snapshot: &ConnectionSnapshot,
+    emit_reachout: bool,
+) -> Result<EstablishedConnection, String> {
+    let connection = Arc::new(Connection::new());
+    let (receiver, peer_address) = connection
+        .connect(snapshot.host.clone(), snapshot.port)
+        .await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    tracing::info!("Successfully connected to server");
+
+    let config = state.config.lock().clone();
+    let client_features = ClientFeatures {
+        shared_playlists: Some(config.user.shared_playlist_enabled),
+        chat: Some(true),
+        readiness: Some(true),
+        managed_rooms: Some(true),
+        persistent_rooms: Some(true),
+        feature_list: Some(true),
+        set_others_readiness: Some(true),
+        ui_mode: Some("GUI".to_string()),
+    };
+    let features_value = serde_json::to_value(client_features).ok();
+
+    let hello_payload = HelloMessage {
+        username: snapshot.username.clone(),
+        password: snapshot.password.clone(),
+        room: Some(RoomInfo {
+            name: snapshot.room.clone(),
+            password: None,
+        }),
+        version: "1.2.255".to_string(),
+        realversion: "1.7.5".to_string(),
+        features: features_value,
+        motd: None,
+    };
+
+    *state.last_hello.lock() = Some(hello_payload);
+    *state.hello_sent.lock() = false;
+
+    let client_supports_tls = create_tls_connector().is_ok();
+    *state.client_supports_tls.lock() = client_supports_tls;
+    let server_supports_tls = *state.server_supports_tls.lock();
+
+    if emit_reachout {
+        if let Some(peer_address) = peer_address {
+            emit_system_message(
+                state,
+                &format!("Successfully reached {} ({})", snapshot.host, peer_address),
+            );
+        } else {
+            emit_system_message(state, &format!("Successfully reached {}", snapshot.host));
+        }
+    }
+
+    if client_supports_tls && server_supports_tls {
+        emit_system_message(state, "Attempting secure connection");
+        let tls_request = ProtocolMessage::TLS {
+            TLS: TLSMessage {
+                start_tls: Some("send".to_string()),
+            },
+        };
+        if let Err(e) = connection.send(tls_request) {
+            tracing::error!("Failed to send TLS request: {}", e);
+            state.emit_event(
+                "tls-status-changed",
+                serde_json::json!({ "status": "unsupported" }),
+            );
+            send_hello(state);
+        } else {
+            tracing::info!("Sent TLS request");
+            state.emit_event(
+                "tls-status-changed",
+                serde_json::json!({ "status": "pending" }),
+            );
+        }
+    } else {
+        if !client_supports_tls {
+            emit_system_message(state, "This client does not support TLS");
+        } else if !server_supports_tls {
+            emit_error_message(state, "This server does not support TLS");
+        }
+        state.emit_event(
+            "tls-status-changed",
+            serde_json::json!({ "status": "unsupported" }),
+        );
+        send_hello(state);
+    }
+
+    *state.connection.lock() = Some(connection.clone());
+
+    Ok(EstablishedConnection {
+        connection,
+        receiver,
+    })
+}
+
+async fn finalize_connection_setup(
+    state: &Arc<AppState>,
+    snapshot: &ConnectionSnapshot,
+    mut receiver: mpsc::UnboundedReceiver<ProtocolMessage>,
+    server_label: String,
+) {
+    let config = state.config.lock().clone();
+    state.client_state.set_username(snapshot.username.clone());
+    state.client_state.set_room(snapshot.room.clone());
+    *state.had_first_playlist_index.lock() = false;
+    *state.playlist_may_need_restoring.lock() = false;
+    *state.last_advance_time.lock() = None;
+    *state.last_rewind_time.lock() = None;
+    *state.last_updated_file_time.lock() = None;
+    *state.last_paused_on_leave_time.lock() = None;
+    *state.last_global_update.lock() = None;
+    state.sync_engine.lock().update_from_config(&config.user);
+    update_autoplay_state(state, &config);
+
+    if let Err(e) = ensure_player_connected(state).await {
+        tracing::warn!("Failed to connect to player: {}", e);
+    } else if let Err(e) = load_placeholder_if_empty(state).await {
+        tracing::warn!("Failed to load placeholder: {}", e);
+    }
+    start_room_warning_loop(state.clone());
+
+    state.emit_event(
+        "connection-status-changed",
+        ConnectionStatusEvent {
+            connected: true,
+            server: Some(server_label),
+        },
+    );
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        while let Some(message) = receiver.recv().await {
+            tracing::debug!("Received message: {:?}", message);
+            handle_server_message(message, &state_clone).await;
+        }
+        tracing::info!("Message processing loop ended");
+        handle_connection_closed(&state_clone).await;
+    });
+}
+
+fn reset_reconnect_state(state: &Arc<AppState>) {
+    let mut reconnect = state.reconnect_state.lock();
+    reconnect.running = false;
+    reconnect.attempts = 0;
+}
+
+fn reconnect_delay(attempt: u32) -> Duration {
+    let exponent = attempt.min(RECONNECT_MAX_EXPONENT);
+    let delay = RECONNECT_BASE_DELAY_SECONDS * 2_f64.powi(exponent as i32);
+    Duration::from_secs_f64(delay)
+}
+
+fn start_reconnect_loop(state: Arc<AppState>) {
+    let snapshot = state.reconnect_snapshot.lock().clone();
+    if snapshot.is_none() {
+        return;
+    }
+    {
+        let mut reconnect = state.reconnect_state.lock();
+        if reconnect.running || !reconnect.enabled {
+            return;
+        }
+        reconnect.running = true;
+    }
+
+    tokio::spawn(async move {
+        loop {
+            let snapshot = match state.reconnect_snapshot.lock().clone() {
+                Some(snapshot) => snapshot,
+                None => {
+                    reset_reconnect_state(&state);
+                    break;
+                }
+            };
+
+            let attempt = {
+                let mut reconnect = state.reconnect_state.lock();
+                reconnect.attempts = reconnect.attempts.saturating_add(1);
+                reconnect.attempts
+            };
+
+            if attempt == 1 {
+                *state.last_global_update.lock() = None;
+                *state.playlist_may_need_restoring.lock() = true;
+                state.emit_event(
+                    "tls-status-changed",
+                    serde_json::json!({ "status": "unknown" }),
+                );
+                emit_system_message(
+                    &state,
+                    "Connection with server lost, attempting to reconnect",
+                );
+                let config = state.config.lock().clone();
+                if config.user.pause_on_leave {
+                    pause_local_player(&state).await;
+                }
+            }
+
+            if attempt > RECONNECT_RETRIES {
+                emit_error_message(&state, "Connection with server failed");
+                let mut reconnect = state.reconnect_state.lock();
+                reconnect.enabled = false;
+                reconnect.running = false;
+                reconnect.attempts = 0;
+                break;
+            }
+
+            sleep(reconnect_delay(attempt.saturating_sub(1))).await;
+
+            if !state.reconnect_state.lock().enabled {
+                reset_reconnect_state(&state);
+                break;
+            }
+
+            match establish_connection(&state, &snapshot, false).await {
+                Ok(established) => {
+                    finalize_connection_setup(
+                        &state,
+                        &snapshot,
+                        established.receiver,
+                        format!("{}:{}", snapshot.host, snapshot.port),
+                    )
+                    .await;
+                    reset_reconnect_state(&state);
+                    break;
+                }
+                Err(err) => {
+                    tracing::warn!("Reconnect attempt failed: {}", err);
+                    continue;
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn connect_to_server<R: Runtime>(
     host: String,
@@ -150,131 +394,41 @@ pub async fn connect_to_server<R: Runtime>(
     }
     let username = truncate_text(&username, FALLBACK_MAX_USERNAME_LENGTH);
 
-    // Create new connection
-    let connection = Arc::new(Connection::new());
+    let snapshot = ConnectionSnapshot {
+        host: host.clone(),
+        port,
+        username: username.clone(),
+        room: room.clone(),
+        password: password.clone(),
+    };
 
-    // Connect to server
-    match connection.connect(host.clone(), port).await {
-        Ok(mut receiver) => {
-            tracing::info!("Successfully connected to server");
+    {
+        let mut reconnect = state.reconnect_state.lock();
+        reconnect.enabled = true;
+        reconnect.running = false;
+        reconnect.attempts = 0;
+    }
+    *state.manual_disconnect.lock() = false;
+    *state.server_supports_tls.lock() = true;
+    *state.reconnect_snapshot.lock() = Some(snapshot.clone());
 
-            let config = state.config.lock().clone();
-            // Send Hello message
-            let client_features = ClientFeatures {
-                shared_playlists: Some(config.user.shared_playlist_enabled),
-                chat: Some(true),
-                readiness: Some(true),
-                managed_rooms: Some(true),
-                persistent_rooms: Some(true),
-                feature_list: Some(true),
-                set_others_readiness: Some(true),
-                ui_mode: Some("GUI".to_string()),
-            };
-            let features_value = serde_json::to_value(client_features).ok();
+    let config = state.config.lock().clone();
 
-            let hello_payload = HelloMessage {
-                username: username.clone(),
-                password: password.clone(),
-                room: Some(RoomInfo {
-                    name: room.clone(),
-                    password: None,
-                }),
-                version: "1.2.255".to_string(),
-                realversion: "1.7.5".to_string(),
-                features: features_value,
-                motd: None,
-            };
-
-            *state.last_hello.lock() = Some(hello_payload.clone());
-            *state.hello_sent.lock() = false;
-
-            if create_tls_connector().is_ok() {
-                emit_system_message(state.inner(), "Attempting secure connection");
-                emit_system_message(state.inner(), &format!("Successfully reached {}", host));
-                let tls_request = ProtocolMessage::TLS {
-                    TLS: TLSMessage {
-                        start_tls: Some("send".to_string()),
-                    },
-                };
-                if let Err(e) = connection.send(tls_request) {
-                    tracing::error!("Failed to send TLS request: {}", e);
-                    send_hello(state.inner());
-                } else {
-                    tracing::info!("Sent TLS request");
-                    state.emit_event(
-                        "tls-status-changed",
-                        serde_json::json!({ "status": "pending" }),
-                    );
-                }
-            } else {
-                tracing::info!("TLS not supported by client, sending Hello");
-                emit_system_message(state.inner(), &format!("Successfully reached {}", host));
-                state.emit_event(
-                    "tls-status-changed",
-                    serde_json::json!({ "status": "unsupported" }),
-                );
-                send_hello(state.inner());
-            }
-
-            // Store connection
-            *state.connection.lock() = Some(connection.clone());
-
-            // Update client state
-            state.client_state.set_username(username.clone());
-            state.client_state.set_room(room.clone());
-            *state.had_first_playlist_index.lock() = false;
-            *state.playlist_may_need_restoring.lock() = false;
-            *state.last_advance_time.lock() = None;
-            *state.last_rewind_time.lock() = None;
-            *state.last_updated_file_time.lock() = None;
-            *state.last_paused_on_leave_time.lock() = None;
-            state.sync_engine.lock().update_from_config(&config.user);
-            update_autoplay_state(state.inner(), &config);
-            maybe_autosave_connection(
+    match establish_connection(state.inner(), &snapshot, true).await {
+        Ok(established) => {
+            maybe_autosave_connection(state.inner(), &app, &config, snapshot.clone());
+            finalize_connection_setup(
                 state.inner(),
-                &app,
-                &config,
-                ConnectionSnapshot {
-                    host: &host,
-                    port,
-                    username: &username,
-                    room: &room,
-                    password: password.as_deref(),
-                },
-            );
-
-            if let Err(e) = ensure_player_connected(state.inner()).await {
-                tracing::warn!("Failed to connect to player: {}", e);
-            } else if let Err(e) = load_placeholder_if_empty(state.inner()).await {
-                tracing::warn!("Failed to load placeholder: {}", e);
-            }
-            start_room_warning_loop(state.inner().clone());
-
-            // Emit connection status event
-            state.emit_event(
-                "connection-status-changed",
-                ConnectionStatusEvent {
-                    connected: true,
-                    server: Some(format!("{}:{}", host, port)),
-                },
-            );
-
-            // Spawn message processing task
-            let state_clone = state.inner().clone();
-            tokio::spawn(async move {
-                while let Some(message) = receiver.recv().await {
-                    tracing::debug!("Received message: {:?}", message);
-                    handle_server_message(message, &state_clone).await;
-                }
-                tracing::info!("Message processing loop ended");
-                handle_connection_closed(&state_clone).await;
-            });
-
+                &snapshot,
+                established.receiver,
+                format!("{}:{}", host, port),
+            )
+            .await;
             Ok(())
         }
-        Err(e) => {
-            tracing::error!("Failed to connect: {}", e);
-            Err(format!("Connection failed: {}", e))
+        Err(err) => {
+            tracing::error!("Failed to connect: {}", err);
+            Err(err)
         }
     }
 }
@@ -283,6 +437,9 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
     match message {
         ProtocolMessage::Hello { Hello } => {
             tracing::info!("Received hello message: {:?}", Hello);
+            if let Some(connection) = state.connection.lock().clone() {
+                connection.set_authenticated();
+            }
             state
                 .client_state
                 .set_server_version(Hello.realversion.clone());
@@ -415,15 +572,31 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
         }
         ProtocolMessage::Error { Error } => {
             tracing::error!("Received error from server: {:?}", Error);
-            let error_msg = serde_json::json!({
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "username": null,
-                "message": Error.message,
-                "messageType": "error",
-            });
-            state.emit_event("chat-message-received", error_msg);
-            if Error.message.contains("startTLS") {
+            let authenticated = state
+                .connection
+                .lock()
+                .as_ref()
+                .map(|conn| {
+                    conn.state() == crate::network::connection::ConnectionState::Authenticated
+                })
+                .unwrap_or(false);
+            if Error.message.contains("startTLS") && !authenticated {
+                *state.server_supports_tls.lock() = false;
+                state.emit_event(
+                    "tls-status-changed",
+                    serde_json::json!({ "status": "unsupported" }),
+                );
                 send_hello(state);
+            } else {
+                emit_error_message(state, &Error.message);
+                let mut reconnect = state.reconnect_state.lock();
+                reconnect.enabled = false;
+                reconnect.running = false;
+                let connection = state.connection.lock().clone();
+                drop(reconnect);
+                if let Some(connection) = connection {
+                    connection.disconnect();
+                }
             }
         }
         ProtocolMessage::Set { Set } => {
@@ -821,14 +994,45 @@ fn update_room_warnings(state: &Arc<AppState>, osd_only: bool) {
         return;
     }
     let warnings = compute_room_warning_state(state, &config);
+    let show_osd = config.user.show_osd && config.user.show_osd_warnings;
     let mut last = state.room_warning_state.lock();
+    let mut timers = state.warning_timers.lock();
 
     if !osd_only && warnings.alone && !last.alone {
         emit_system_message(state, "You're alone in the room");
     }
 
-    if config.user.show_osd_warnings {
-        show_room_warning_osd(state, &config, &warnings);
+    let was_not_ready = last.not_ready.is_some();
+
+    update_warning_timer_state(&mut timers.alone, warnings.alone);
+    update_warning_timer_state(
+        &mut timers.file_differences,
+        warnings.file_differences.is_some(),
+    );
+    update_warning_timer_state(&mut timers.not_ready, warnings.not_ready.is_some());
+
+    if should_reset_not_ready_timer(state, &warnings) {
+        timers.not_ready.displayed_for = 0;
+    }
+
+    if show_osd {
+        if osd_only {
+            if tick_warning_timer(&mut timers.alone) {
+                show_room_warning_osd(state, &config, &warnings);
+            }
+            if tick_warning_timer(&mut timers.file_differences) {
+                show_room_warning_osd(state, &config, &warnings);
+            }
+            if tick_warning_timer(&mut timers.not_ready) {
+                show_room_warning_osd(state, &config, &warnings);
+            }
+        } else if warnings.alone
+            || warnings.file_differences.is_some()
+            || warnings.not_ready.is_some()
+            || (was_not_ready && warnings.not_ready.is_none())
+        {
+            show_room_warning_osd(state, &config, &warnings);
+        }
     }
 
     *last = warnings;
@@ -839,26 +1043,108 @@ fn show_room_warning_osd(
     config: &crate::config::SyncplayConfig,
     warnings: &crate::app_state::RoomWarningState,
 ) {
-    if !config.user.show_osd {
+    let Some(message) = build_room_warning_message(state, config, warnings) else {
         return;
+    };
+    maybe_show_osd(state, config, &message, true);
+}
+
+fn update_warning_timer_state(timer: &mut WarningTimerState, active: bool) {
+    if active {
+        if !timer.active {
+            timer.active = true;
+            timer.displayed_for = 0;
+        }
+    } else {
+        timer.active = false;
+        timer.displayed_for = 0;
+    }
+}
+
+fn tick_warning_timer(timer: &mut WarningTimerState) -> bool {
+    if !timer.active {
+        return false;
+    }
+    if timer.displayed_for >= OSD_WARNING_MESSAGE_DURATION_SECONDS {
+        timer.displayed_for = 0;
+        timer.active = false;
+        return false;
+    }
+    timer.displayed_for = timer
+        .displayed_for
+        .saturating_add(WARNING_OSD_INTERVAL_SECONDS as u32);
+    true
+}
+
+fn should_reset_not_ready_timer(
+    state: &Arc<AppState>,
+    warnings: &crate::app_state::RoomWarningState,
+) -> bool {
+    if warnings.alone || !is_readiness_supported(state, true) {
+        return false;
+    }
+    let player_paused = state
+        .local_playback_state
+        .lock()
+        .current()
+        .map(|(_, paused)| paused)
+        .unwrap_or(true);
+    let current_ready = current_user_ready_with_file(state) == Some(true);
+    let all_relevant_ready = are_all_relevant_users_in_room_ready(state, false);
+    player_paused || !current_ready || !all_relevant_ready
+}
+
+fn build_room_warning_message(
+    state: &Arc<AppState>,
+    config: &crate::config::SyncplayConfig,
+    warnings: &crate::app_state::RoomWarningState,
+) -> Option<String> {
+    if !config.user.show_osd {
+        return None;
+    }
+    if state.player.lock().is_none() {
+        return None;
+    }
+    if state.autoplay.lock().countdown_active {
+        return None;
     }
 
-    let message = if warnings.alone {
-        Some("You're alone in the room".to_string())
-    } else {
-        match (&warnings.file_differences, &warnings.not_ready) {
-            (Some(file_diff), Some(not_ready)) => Some(format!(
-                "File differences: {}{}{}",
-                file_diff, OSD_MESSAGE_SEPARATOR, not_ready
-            )),
-            (Some(file_diff), None) => Some(format!("File differences: {}", file_diff)),
-            (None, Some(not_ready)) => Some(not_ready.to_string()),
-            (None, None) => None,
+    if warnings.alone {
+        return Some("You're alone in the room".to_string());
+    }
+
+    let file_diff_message = warnings
+        .file_differences
+        .as_ref()
+        .map(|file_diff| format!("File differences: {}", file_diff));
+
+    let readiness_supported = is_readiness_supported(state, true);
+    let ready_message = if readiness_supported {
+        if are_all_users_in_room_ready(state, false) {
+            Some(format!(
+                "Everyone is ready ({} users)",
+                ready_user_count(state)
+            ))
+        } else {
+            warnings.not_ready.clone()
         }
+    } else {
+        None
     };
 
-    let Some(message) = message else { return };
-    maybe_show_osd(state, config, &message, true);
+    if let Some(file_diff_message) = file_diff_message {
+        if current_user_can_control(state) && readiness_supported {
+            if let Some(ready_message) = ready_message {
+                return Some(format!(
+                    "{}{}{}",
+                    file_diff_message, OSD_MESSAGE_SEPARATOR, ready_message
+                ));
+            }
+        }
+        return Some(file_diff_message);
+    }
+
+    ready_message
 }
 
 fn compute_room_warning_state(
@@ -872,10 +1158,6 @@ fn compute_room_warning_state(
         .into_iter()
         .filter(|user| user.room == current_room)
         .collect();
-
-    if users_in_room.is_empty() {
-        return crate::app_state::RoomWarningState::default();
-    }
 
     let others_in_room: Vec<crate::client::state::User> = users_in_room
         .iter()
@@ -891,7 +1173,10 @@ fn compute_room_warning_state(
     let mut diff_size = false;
     let mut diff_duration = false;
     if let Some(current_file) = current_file.as_ref() {
-        for user in others_in_room.iter() {
+        for user in others_in_room
+            .iter()
+            .filter(|user| user_can_control_in_room(state, user))
+        {
             let Some(other_file) = user.file.as_ref() else {
                 continue;
             };
@@ -927,7 +1212,10 @@ fn compute_room_warning_state(
         Some(diff_parts.join(", "))
     };
 
-    let not_ready = if alone || !is_readiness_supported(state, true) {
+    let not_ready = if alone
+        || !is_readiness_supported(state, true)
+        || are_all_relevant_users_in_room_ready(state, false)
+    {
         None
     } else {
         let mut not_ready_users: Vec<String> = Vec::new();
@@ -1077,39 +1365,16 @@ pub(crate) async fn handle_connection_closed(state: &Arc<AppState>) {
     if connection.is_none() {
         return;
     }
-
-    state.client_state.clear_users();
-    state.client_state.set_file(None);
-    state.client_state.set_ready(false);
-    *state.server_features.lock() = ServerFeatures::default();
-    *state.playlist_may_need_restoring.lock() = true;
-    *state.had_first_playlist_index.lock() = false;
-    *state.last_connect_time.lock() = None;
-    *state.last_rewind_time.lock() = None;
-    *state.last_advance_time.lock() = None;
-    *state.last_updated_file_time.lock() = None;
-    *state.last_paused_on_leave_time.lock() = None;
-    {
-        let mut autoplay = state.autoplay.lock();
-        autoplay.countdown_active = false;
-        autoplay.countdown_remaining = 0;
-    }
-
-    if let Err(e) = stop_player(state).await {
-        tracing::warn!("Failed to stop player after disconnect: {}", e);
+    let manual_disconnect = *state.manual_disconnect.lock();
+    if manual_disconnect {
+        *state.manual_disconnect.lock() = false;
+        return;
     }
 
     *state.room_warning_state.lock() = crate::app_state::RoomWarningState::default();
+    *state.warning_timers.lock() = WarningTimers::default();
     *state.room_warning_task_running.lock() = false;
 
-    state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
-    state.emit_event(
-        "playlist-updated",
-        crate::app_state::PlaylistEvent {
-            items: Vec::new(),
-            current_index: None,
-        },
-    );
     state.emit_event(
         "connection-status-changed",
         ConnectionStatusEvent {
@@ -1122,7 +1387,11 @@ pub(crate) async fn handle_connection_closed(state: &Arc<AppState>) {
         serde_json::json!({ "status": "unknown" }),
     );
 
-    emit_system_message(state, "Disconnected from server");
+    if state.reconnect_state.lock().enabled {
+        start_reconnect_loop(state.clone());
+    } else {
+        emit_system_message(state, "Disconnected from server");
+    }
 }
 
 async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
@@ -1512,23 +1781,31 @@ async fn handle_tls_message(state: &Arc<AppState>, tls: TLSMessage) {
 
     if answer == "true" {
         tracing::info!("Server accepted TLS, upgrading connection");
-        if let Err(e) = connection.upgrade_tls().await {
-            tracing::error!("TLS upgrade failed: {}", e);
-            state.emit_event(
-                "tls-status-changed",
-                serde_json::json!({ "status": "unsupported" }),
-            );
-            send_hello(state);
-            return;
-        }
+        let tls_info = match connection.upgrade_tls().await {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::error!("TLS upgrade failed: {}", e);
+                state.emit_event(
+                    "tls-status-changed",
+                    serde_json::json!({ "status": "unsupported" }),
+                );
+                send_hello(state);
+                return;
+            }
+        };
         state.emit_event(
             "tls-status-changed",
             serde_json::json!({ "status": "enabled" }),
         );
-        emit_system_message(state, "Secure connection established");
+        let protocol = tls_info.protocol.unwrap_or_else(|| "TLS".to_string());
+        emit_system_message(
+            state,
+            &format!("Secure connection established ({})", protocol),
+        );
         send_hello(state);
     } else if answer == "false" {
         tracing::info!("Server does not support TLS, sending Hello");
+        *state.server_supports_tls.lock() = false;
         state.emit_event(
             "tls-status-changed",
             serde_json::json!({ "status": "unsupported" }),
@@ -1582,7 +1859,7 @@ fn maybe_autosave_connection<R: Runtime>(
     state: &Arc<AppState>,
     app: &AppHandle<R>,
     config: &crate::config::SyncplayConfig,
-    snapshot: ConnectionSnapshot<'_>,
+    snapshot: ConnectionSnapshot,
 ) {
     if !config.user.autosave_joins_to_list {
         return;
@@ -1591,21 +1868,21 @@ fn maybe_autosave_connection<R: Runtime>(
     let mut updated = config.clone();
     updated.server.host = snapshot.host.to_string();
     updated.server.port = snapshot.port;
-    updated.server.password = snapshot.password.map(|value| value.to_string());
+    updated.server.password = snapshot.password.clone();
     updated.user.username = snapshot.username.to_string();
     updated.user.default_room = snapshot.room.to_string();
 
     updated.add_recent_server(ServerConfig {
         host: snapshot.host.to_string(),
         port: snapshot.port,
-        password: snapshot.password.map(|value| value.to_string()),
+        password: snapshot.password.clone(),
     });
 
     if !updated
         .user
         .room_list
         .iter()
-        .any(|entry| entry == snapshot.room)
+        .any(|entry| entry == &snapshot.room)
     {
         updated.user.room_list.insert(0, snapshot.room.to_string());
     }
@@ -1630,6 +1907,14 @@ fn current_user_can_control(state: &Arc<AppState>) -> bool {
         .get_user(&username)
         .map(|user| user.is_controller)
         .unwrap_or(false)
+}
+
+fn user_can_control_in_room(state: &Arc<AppState>, user: &crate::client::state::User) -> bool {
+    let room = state.client_state.get_room();
+    if !is_controlled_room(&room) {
+        return true;
+    }
+    user.is_controller
 }
 
 fn current_user_ready_with_file(state: &Arc<AppState>) -> Option<bool> {
@@ -1684,6 +1969,41 @@ fn are_all_users_in_room_ready(state: &Arc<AppState>, require_same_filenames: bo
                 return false;
             };
             if !same_filename(Some(current_file), Some(other_file)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn are_all_relevant_users_in_room_ready(
+    state: &Arc<AppState>,
+    require_same_filenames: bool,
+) -> bool {
+    let current_ready = current_user_ready_with_file(state);
+    if current_ready != Some(true) {
+        return false;
+    }
+    if current_user_can_control(state) {
+        return are_all_users_in_room_ready(state, require_same_filenames);
+    }
+    let room = state.client_state.get_room();
+    let current_file = state.client_state.get_file();
+    for user in state.client_state.get_users_in_room(&room) {
+        if !user_can_control_in_room(state, &user) {
+            continue;
+        }
+        if user.is_ready_with_file() == Some(false) {
+            return false;
+        }
+        if require_same_filenames {
+            let Some(current_file) = current_file.as_ref() else {
+                return false;
+            };
+            let Some(user_file) = user.file.as_ref() else {
+                return false;
+            };
+            if !same_filename(Some(current_file), Some(user_file)) {
                 return false;
             }
         }
@@ -2185,6 +2505,14 @@ fn emit_playlist_update(state: &Arc<AppState>) {
 pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     tracing::info!("Disconnecting from server");
 
+    {
+        let mut reconnect = state.reconnect_state.lock();
+        reconnect.enabled = false;
+        reconnect.running = false;
+        reconnect.attempts = 0;
+    }
+    *state.manual_disconnect.lock() = true;
+
     // Disconnect
     if let Some(connection) = state.connection.lock().take() {
         connection.disconnect();
@@ -2212,6 +2540,7 @@ pub async fn disconnect_from_server(state: State<'_, Arc<AppState>>) -> Result<(
         autoplay.countdown_remaining = 0;
     }
     *state.room_warning_state.lock() = crate::app_state::RoomWarningState::default();
+    *state.warning_timers.lock() = WarningTimers::default();
     *state.room_warning_task_running.lock() = false;
     state.emit_event("user-list-updated", serde_json::json!({ "users": [] }));
     state.emit_event(

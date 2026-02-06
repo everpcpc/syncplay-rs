@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use super::messages::ProtocolMessage;
 use super::protocol::SyncplayCodec;
-use super::tls::upgrade_to_tls;
+use super::tls::{upgrade_to_tls, TlsInfo};
 
 const CONNECT_TIMEOUT_SECONDS: u64 = 30;
 
@@ -26,7 +26,7 @@ enum ConnectionCommand {
     Send(Box<ProtocolMessage>),
     UpgradeTls {
         domain: String,
-        response: oneshot::Sender<Result<()>>,
+        response: oneshot::Sender<Result<TlsInfo>>,
     },
     Disconnect,
 }
@@ -55,18 +55,18 @@ impl Transport {
         }
     }
 
-    async fn upgrade_tls(&mut self, domain: &str) -> Result<()> {
+    async fn upgrade_tls(&mut self, domain: &str) -> Result<TlsInfo> {
         match std::mem::replace(self, Transport::Empty) {
             Transport::Plain(framed) => {
                 let framed = *framed;
                 let stream = framed.into_inner();
-                let tls_stream = upgrade_to_tls(stream, domain).await?;
+                let (tls_stream, info) = upgrade_to_tls(stream, domain).await?;
                 *self = Transport::Tls(Box::new(Framed::new(tls_stream, SyncplayCodec::new())));
-                Ok(())
+                Ok(info)
             }
             Transport::Tls(framed) => {
                 *self = Transport::Tls(framed);
-                Ok(())
+                Ok(TlsInfo { protocol: None })
             }
             Transport::Empty => anyhow::bail!("Transport not initialized"),
         }
@@ -100,7 +100,7 @@ impl Connection {
         &self,
         host: String,
         port: u16,
-    ) -> Result<mpsc::UnboundedReceiver<ProtocolMessage>> {
+    ) -> Result<(mpsc::UnboundedReceiver<ProtocolMessage>, Option<String>)> {
         info!("Connecting to {}:{}", host, port);
         *self.state.lock() = ConnectionState::Connecting;
         *self.host.lock() = host.clone();
@@ -115,6 +115,8 @@ impl Connection {
         .await
         .context("Connection attempt timed out")?
         .context("Failed to connect to server")?;
+
+        let peer_address = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
 
         info!("TCP connection established");
         *self.state.lock() = ConnectionState::Connected;
@@ -181,7 +183,7 @@ impl Connection {
             }
         });
 
-        Ok(msg_rx)
+        Ok((msg_rx, peer_address))
     }
 
     /// Send a message to the server
@@ -196,7 +198,7 @@ impl Connection {
     }
 
     /// Upgrade connection to TLS
-    pub async fn upgrade_tls(&self) -> Result<()> {
+    pub async fn upgrade_tls(&self) -> Result<TlsInfo> {
         let (tx, rx) = oneshot::channel();
         let domain = self.host.lock().clone();
         if let Some(cmd_tx) = self.tx.lock().as_ref() {
