@@ -189,6 +189,13 @@ impl MpvIpc {
                                     state.lock().update_property(prop_id, &value);
                                 }
                             }
+                        } else if event.event == "log-message" {
+                            if let Some(text) = event.text {
+                                if event_tx.send(MpvPlayerEvent::LogMessage(text)).is_err() {
+                                    warn!("Failed to send player event");
+                                    break;
+                                }
+                            }
                         } else {
                             let player_event = MpvPlayerEvent::from_event_name(
                                 &event.event,
@@ -207,6 +214,9 @@ impl MpvIpc {
 
         // Observe properties
         self.observe_properties().await?;
+        if let Err(e) = self.request_log_messages("info").await {
+            warn!("Failed to enable MPV log messages: {}", e);
+        }
 
         Ok(event_rx)
     }
@@ -227,6 +237,18 @@ impl MpvIpc {
             self.send_command(cmd)?;
         }
 
+        Ok(())
+    }
+
+    async fn request_log_messages(&self, level: &str) -> Result<()> {
+        let cmd = MpvCommand::request_log_messages(level);
+        let response = self.send_command_async(cmd).await?;
+        if !response.error.is_empty() && response.error != "success" {
+            warn!(
+                "MPV request_log_messages returned error: {}",
+                response.error
+            );
+        }
         Ok(())
     }
 

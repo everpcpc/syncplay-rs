@@ -7,6 +7,8 @@ pub enum MpvPlayerEvent {
     PlaybackRestart,
     /// Playback has ended
     EndFile { reason: EndFileReason },
+    /// Log message from MPV
+    LogMessage(String),
     /// Seek operation completed
     SeekCompleted,
     /// Property changed (handled separately via property observation)

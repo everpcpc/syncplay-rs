@@ -32,6 +32,12 @@ pub struct MpvEvent {
     pub data: Option<Value>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 /// MPV message (either response or event)
@@ -157,6 +163,17 @@ impl MpvCommand {
         command.extend(args);
         Self {
             command,
+            request_id: None,
+        }
+    }
+
+    /// Request log messages from MPV
+    pub fn request_log_messages(level: &str) -> Self {
+        Self {
+            command: vec![
+                Value::String("request_log_messages".to_string()),
+                Value::String(level.to_string()),
+            ],
             request_id: None,
         }
     }
