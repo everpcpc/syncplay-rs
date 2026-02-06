@@ -12,6 +12,9 @@ mod player;
 mod utils;
 
 use app_state::AppState;
+use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri::utils::TitleBarStyle;
 #[cfg(windows)]
 use tauri_plugin_frame::FramePluginBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -42,6 +45,23 @@ fn main() {
         .setup(move |app| {
             // Store app handle for event emission
             app_state.set_app_handle(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(err) = window.set_decorations(true) {
+                        tracing::warn!(
+                            "Failed to enable window decorations on macOS: {}",
+                            err
+                        );
+                    }
+                    if let Err(err) = window.set_title_bar_style(TitleBarStyle::Overlay) {
+                        tracing::warn!(
+                            "Failed to set title bar style on macOS: {}",
+                            err
+                        );
+                    }
+                }
+            }
             let config = crate::config::load_config(app.handle()).unwrap_or_else(|e| {
                 tracing::error!("Failed to load config: {}", e);
                 crate::config::SyncplayConfig::default()

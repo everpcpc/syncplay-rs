@@ -30,7 +30,6 @@
   --app-danger-soft: rgba(255, 110, 110, 0.18);
   --app-panel-glass: rgba(18, 20, 28, 0.72);
   --titlebar-height: 32px;
-  --app-titlebar-left-inset: 0px;
   color-scheme: dark;
 }
 
@@ -153,7 +152,7 @@
 .drag-strip {
   position: absolute;
   top: 0;
-  left: var(--app-titlebar-left-inset, 0px);
+  left: 0;
   right: var(--tauri-frame-controls-width, 0px);
   height: var(--titlebar-height, 32px);
   z-index: 2;

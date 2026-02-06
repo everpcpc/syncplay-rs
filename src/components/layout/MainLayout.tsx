@@ -94,19 +94,6 @@ export function MainLayout() {
   }, []);
 
   useEffect(() => {
-    if (typeof navigator === "undefined") return;
-    const root = document.documentElement;
-    const isMac = navigator.platform.toLowerCase().includes("mac");
-    root.style.setProperty(
-      "--app-titlebar-left-inset",
-      isMac ? "var(--tauri-frame-controls-width, 0px)" : "0px"
-    );
-    return () => {
-      root.style.removeProperty("--app-titlebar-left-inset");
-    };
-  }, []);
-
-  useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
 
