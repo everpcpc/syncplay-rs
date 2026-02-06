@@ -12,9 +12,9 @@ mod player;
 mod utils;
 
 use app_state::AppState;
-use tauri::Manager;
 #[cfg(target_os = "macos")]
 use tauri::utils::TitleBarStyle;
+use tauri::Manager;
 #[cfg(windows)]
 use tauri_plugin_frame::FramePluginBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -49,16 +49,10 @@ fn main() {
             {
                 if let Some(window) = app.get_webview_window("main") {
                     if let Err(err) = window.set_decorations(true) {
-                        tracing::warn!(
-                            "Failed to enable window decorations on macOS: {}",
-                            err
-                        );
+                        tracing::warn!("Failed to enable window decorations on macOS: {}", err);
                     }
                     if let Err(err) = window.set_title_bar_style(TitleBarStyle::Overlay) {
-                        tracing::warn!(
-                            "Failed to set title bar style on macOS: {}",
-                            err
-                        );
+                        tracing::warn!("Failed to set title bar style on macOS: {}", err);
                     }
                 }
             }
