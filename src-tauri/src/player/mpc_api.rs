@@ -459,17 +459,16 @@ impl MpcApiBackend {
         let position_waiter = Arc::new(Mutex::new(None));
         let version_waiter = Arc::new(Mutex::new(None));
 
-        spawn_event_loop(
+        spawn_event_loop(EventLoopArgs {
             event_rx,
-            listener.hwnd_raw(),
-            listener.mpc_handle_raw(),
-            state.clone(),
-            file_ready.clone(),
-            switch_pause_calls.clone(),
-            version.clone(),
-            position_waiter.clone(),
-            version_waiter.clone(),
-        );
+            listener_hwnd: listener.hwnd_raw(),
+            state: state.clone(),
+            file_ready: file_ready.clone(),
+            switch_pause_calls: switch_pause_calls.clone(),
+            version: version.clone(),
+            position_waiter: position_waiter.clone(),
+            version_waiter: version_waiter.clone(),
+        });
 
         let backend = Self {
             kind,
@@ -549,10 +548,8 @@ impl MpcApiBackend {
 
     fn send_command_retry(&self, cmd: u32, payload: Option<CommandPayload>) -> anyhow::Result<()> {
         for _ in 0..MPC_MAX_RETRIES {
-            if self.file_ready() {
-                if self.listener.send_command(cmd, payload.clone()).is_ok() {
-                    return Ok(());
-                }
+            if self.file_ready() && self.listener.send_command(cmd, payload.clone()).is_ok() {
+                return Ok(());
             }
             std::thread::sleep(MPC_RETRY_WAIT_TIME);
         }
@@ -641,17 +638,29 @@ impl PlayerBackend for MpcApiBackend {
 }
 
 #[cfg(windows)]
-fn spawn_event_loop(
+struct EventLoopArgs {
     event_rx: std::sync::mpsc::Receiver<MpcEvent>,
     listener_hwnd: isize,
-    _mpc_handle: Option<isize>,
     state: Arc<Mutex<PlayerState>>,
     file_ready: Arc<AtomicBool>,
     switch_pause_calls: Arc<AtomicBool>,
     version: Arc<Mutex<Option<String>>>,
     position_waiter: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     version_waiter: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-) {
+}
+
+#[cfg(windows)]
+fn spawn_event_loop(args: EventLoopArgs) {
+    let EventLoopArgs {
+        event_rx,
+        listener_hwnd,
+        state,
+        file_ready,
+        switch_pause_calls,
+        version,
+        position_waiter,
+        version_waiter,
+    } = args;
     std::thread::spawn(move || {
         for event in event_rx {
             match event {
