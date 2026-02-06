@@ -17,6 +17,7 @@ import {
   LuSun,
   LuZap,
 } from "react-icons/lu";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWindowDrag } from "../../hooks/useWindowDrag";
 import { PlaylistPanel } from "../playlist/PlaylistPanel";
@@ -51,6 +52,11 @@ export function MainLayout() {
   const [sidePanelsSize, setSidePanelsSize] = useState({ width: 0, height: 0 });
   const [sideWidth, setSideWidth] = useState<number | null>(null);
   const [sidePanelSize, setSidePanelSize] = useState<number | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    "sync" | "ready" | "privacy" | "chat" | "osd" | "misc" | undefined
+  >(undefined);
   const connection = useSyncplayStore((state) => state.connection);
   const tlsStatus = useSyncplayStore((state) => state.tlsStatus);
   const rttMs = useSyncplayStore((state) => state.rttMs);
@@ -65,6 +71,40 @@ export function MainLayout() {
   const MAIN_MIN_WIDTH = 360;
   const SIDE_MIN_WIDTH = 320;
   const SIDE_PANEL_MIN = 200;
+
+  useEffect(() => {
+    let active = true;
+    const loadVersion = async () => {
+      try {
+        const version = await getVersion();
+        if (active) {
+          setAppVersion(version);
+        }
+      } catch (error) {
+        console.warn("Failed to load app version", error);
+        if (active) {
+          setAppVersion(null);
+        }
+      }
+    };
+    void loadVersion();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const root = document.documentElement;
+    const isMac = navigator.platform.toLowerCase().includes("mac");
+    root.style.setProperty(
+      "--app-titlebar-left-inset",
+      isMac ? "var(--tauri-frame-controls-width, 0px)" : "0px"
+    );
+    return () => {
+      root.style.removeProperty("--app-titlebar-left-inset");
+    };
+  }, []);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -89,6 +129,7 @@ export function MainLayout() {
           autoUpdateCheckedRef.current = true;
           const updateResult = await checkForUpdates();
           if (updateResult.status === "available") {
+            setUpdateVersion(updateResult.update.version);
             addNotification({
               type: "info",
               message: `Update ${updateResult.update.version} available. Open Settings > Misc to install.`,
@@ -98,8 +139,11 @@ export function MainLayout() {
             } catch (closeError) {
               console.warn("Failed to close updater resource", closeError);
             }
-          } else if (updateResult.status === "error") {
-            console.warn("Auto update check failed", updateResult.message);
+          } else {
+            setUpdateVersion(null);
+            if (updateResult.status === "error") {
+              console.warn("Auto update check failed", updateResult.message);
+            }
           }
         }
 
@@ -388,6 +432,18 @@ export function MainLayout() {
     window.addEventListener("pointerup", handlePointerUp);
   };
 
+  const handleOpenSettings = (
+    initialTab?: "sync" | "ready" | "privacy" | "chat" | "osd" | "misc"
+  ) => {
+    setSettingsInitialTab(initialTab);
+    setShowSettingsDialog(true);
+  };
+
+  const handleCloseSettings = () => {
+    setShowSettingsDialog(false);
+    setSettingsInitialTab(undefined);
+  };
+
   return (
     <div className="app-shell">
       <NotificationContainer />
@@ -417,11 +473,40 @@ export function MainLayout() {
 
         <section className="app-side-column">
           <header
-            className="app-header"
+            className="app-header relative"
             id="toolbar-drag"
             data-tauri-drag-region
             onMouseDown={handleHeaderMouseDown}
           >
+            {(appVersion || updateVersion) && (
+              <div
+                className="absolute top-2 flex items-center gap-2 app-header-actions"
+                data-tauri-drag-region="false"
+                style={{
+                  right: "calc(16px + var(--tauri-frame-controls-width, 0px))",
+                }}
+              >
+                {appVersion && (
+                  <div
+                    className="text-xs app-tag-muted px-2.5 py-1 rounded-full"
+                    aria-label={`Version ${appVersion}`}
+                    title={`Version ${appVersion}`}
+                  >
+                    v{appVersion}
+                  </div>
+                )}
+                {updateVersion && (
+                  <button
+                    onClick={() => handleOpenSettings("misc")}
+                    className="btn-primary px-2.5 py-1 rounded-full text-xs"
+                    aria-label={`Update available: ${updateVersion}`}
+                    title={`Update available: ${updateVersion}`}
+                  >
+                    Update
+                  </button>
+                )}
+              </div>
+            )}
             <div className="app-header-row">
               <PlayerStatus />
               <div className="app-header-actions w-full" data-tauri-drag-region="false">
@@ -535,7 +620,7 @@ export function MainLayout() {
                     <LuLink2 className="app-icon" />
                   </button>
                   <button
-                    onClick={() => setShowSettingsDialog(true)}
+                    onClick={() => handleOpenSettings()}
                     className="btn-neutral app-icon-button app-tooltip-right"
                     data-tauri-drag-region="false"
                     aria-label="Settings"
@@ -597,7 +682,13 @@ export function MainLayout() {
       />
 
       {/* Settings dialog */}
-      <SettingsDialog isOpen={showSettingsDialog} onClose={() => setShowSettingsDialog(false)} />
+      <SettingsDialog
+        isOpen={showSettingsDialog}
+        onClose={handleCloseSettings}
+        initialTab={settingsInitialTab}
+        appVersion={appVersion}
+        onUpdateAvailable={setUpdateVersion}
+      />
     </div>
   );
 }

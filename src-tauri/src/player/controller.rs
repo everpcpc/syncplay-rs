@@ -827,6 +827,7 @@ fn start_mpv_process_if_needed(
     }
 
     let mut cmd = Command::new(player_path);
+    cmd.env_remove("TERM");
     let launch_args = args.to_vec();
     let mut full_args = Vec::new();
     let term_playing_msg = "<SyncplayUpdateFile>\nANS_filename=${filename}\nANS_length=${=duration:${=length:0}}\nANS_path=${path}\n</SyncplayUpdateFile>";
