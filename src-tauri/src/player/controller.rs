@@ -946,17 +946,15 @@ pub(crate) fn send_file_update(state: &Arc<AppState>, player_state: &PlayerState
                 .and_then(|name| name.to_str())
                 .map(|name| name.to_string())
                 .or_else(|| player_state.filename.clone())
+        } else if is_url(path) {
+            Some(path.to_string())
         } else {
-            if is_url(path) {
-                Some(path.to_string())
-            } else {
-                player_state.filename.clone().or_else(|| {
-                    Path::new(path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(|name| name.to_string())
-                })
-            }
+            player_state.filename.clone().or_else(|| {
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+            })
         }
     } else {
         let filename = player_state.filename.as_deref();
