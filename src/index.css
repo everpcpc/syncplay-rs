@@ -29,7 +29,7 @@
   --app-danger: rgba(255, 110, 110, 0.95);
   --app-danger-soft: rgba(255, 110, 110, 0.18);
   --app-panel-glass: rgba(18, 20, 28, 0.72);
-  --titlebar-height: 24px;
+  --titlebar-height: 32px;
   color-scheme: dark;
 }
 
@@ -153,8 +153,8 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  height: var(--titlebar-height, 24px);
+  right: var(--tauri-frame-controls-width, 0px);
+  height: var(--titlebar-height, 32px);
   z-index: 2;
 }
 
@@ -259,6 +259,7 @@
   border: 1px solid var(--app-border-strong);
   border-radius: 16px;
   padding: 12px 16px;
+  padding-right: calc(16px + var(--tauri-frame-controls-width, 0px));
   -webkit-user-select: none;
   user-select: none;
   -webkit-app-region: drag;
