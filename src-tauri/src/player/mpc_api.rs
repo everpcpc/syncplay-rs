@@ -10,6 +10,9 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+#[cfg(windows)]
+use windows::Win32::Foundation::HWND;
+
 const MPC_OPEN_MAX_WAIT_TIME: Duration = Duration::from_secs(10);
 const MPC_LOCK_WAIT_TIME: Duration = Duration::from_millis(200);
 const MPC_RETRY_WAIT_TIME: Duration = Duration::from_millis(10);
@@ -43,15 +46,16 @@ mod win {
     use super::*;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    use std::ptr::{null, null_mut};
+    use std::ptr::null;
     use std::sync::mpsc::{self, Receiver, Sender};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::DataExchange::COPYDATASTRUCT;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-        SendMessageW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA, MSG, WM_COPYDATA, WNDCLASSW,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
+        RegisterClassW, SendMessageW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA, MSG,
+        WM_COPYDATA, WNDCLASSW,
     };
 
     #[derive(Debug)]
@@ -77,47 +81,62 @@ mod win {
             let (tx, rx) = mpsc::channel();
             let mpc_handle = Arc::new(AtomicIsize::new(0));
             let mpc_handle_clone = mpc_handle.clone();
-            let (hwnd_tx, hwnd_rx) = mpsc::channel();
+            let (hwnd_tx, hwnd_rx) = mpsc::channel::<anyhow::Result<HWND>>();
 
             std::thread::spawn(move || unsafe {
-                let class_name = widestr("MPCApiListener");
-                let hinstance = GetModuleHandleW(PCWSTR(null()));
-                let wc = WNDCLASSW {
-                    lpfnWndProc: Some(wndproc),
-                    hInstance: hinstance,
-                    lpszClassName: PCWSTR(class_name.as_ptr()),
-                    ..Default::default()
-                };
-                RegisterClassW(&wc);
-                let hwnd = CreateWindowExW(
-                    Default::default(),
-                    PCWSTR(class_name.as_ptr()),
-                    PCWSTR(widestr("MPC Listener").as_ptr()),
-                    Default::default(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    HWND(0),
-                    None,
-                    hinstance,
-                    null(),
-                );
-                let boxed = Box::new(MpcListenerState {
-                    tx: tx.clone(),
-                    mpc_handle: mpc_handle_clone,
-                });
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
-                let _ = hwnd_tx.send(hwnd);
-                let mut msg = MSG::default();
-                while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
-                    DispatchMessageW(&msg);
+                let result = (|| -> anyhow::Result<HWND> {
+                    let class_name = widestr("MPCApiListener");
+                    let title = widestr("MPC Listener");
+                    let hinstance = GetModuleHandleW(PCWSTR(null()))?;
+                    let wc = WNDCLASSW {
+                        lpfnWndProc: Some(wndproc),
+                        hInstance: hinstance,
+                        lpszClassName: PCWSTR(class_name.as_ptr()),
+                        ..Default::default()
+                    };
+                    RegisterClassW(&wc);
+                    let hwnd = CreateWindowExW(
+                        Default::default(),
+                        PCWSTR(class_name.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        Default::default(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        HWND(0),
+                        None,
+                        hinstance,
+                        None,
+                    );
+                    if hwnd.0 == 0 {
+                        anyhow::bail!("Failed to create MPC listener window");
+                    }
+                    let boxed = Box::new(MpcListenerState {
+                        tx: tx.clone(),
+                        mpc_handle: mpc_handle_clone,
+                    });
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
+                    Ok(hwnd)
+                })();
+
+                match result {
+                    Ok(hwnd) => {
+                        let _ = hwnd_tx.send(Ok(hwnd));
+                        let mut msg = MSG::default();
+                        while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                            DispatchMessageW(&msg);
+                        }
+                    }
+                    Err(err) => {
+                        let _ = hwnd_tx.send(Err(err));
+                    }
                 }
             });
 
             let hwnd = hwnd_rx
                 .recv()
-                .map_err(|_| anyhow::anyhow!("Failed to create MPC listener window"))?;
+                .map_err(|_| anyhow::anyhow!("Failed to create MPC listener window"))??;
             Ok((
                 Self {
                     hwnd,
@@ -157,7 +176,7 @@ mod win {
             let cds = COPYDATASTRUCT {
                 dwData: cmd as usize,
                 cbData: len as u32,
-                lpData: ptr,
+                lpData: ptr as *mut std::ffi::c_void,
             };
             unsafe {
                 SendMessageW(
@@ -619,8 +638,8 @@ impl PlayerBackend for MpcApiBackend {
 #[cfg(windows)]
 fn spawn_event_loop(
     event_rx: std::sync::mpsc::Receiver<MpcEvent>,
-    listener_hwnd: impl std::fmt::Debug,
-    _mpc_handle: Option<impl std::fmt::Debug>,
+    listener_hwnd: HWND,
+    _mpc_handle: Option<HWND>,
     state: Arc<Mutex<PlayerState>>,
     file_ready: Arc<AtomicBool>,
     switch_pause_calls: Arc<AtomicBool>,
