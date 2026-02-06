@@ -12,9 +12,9 @@ mod player;
 mod utils;
 
 use app_state::AppState;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(windows)]
 use tauri_plugin_frame::FramePluginBuilder;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     // Initialize tracing
