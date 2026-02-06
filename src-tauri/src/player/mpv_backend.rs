@@ -15,8 +15,8 @@ use super::mpv_ipc::MpvIpc;
 use super::properties::PlayerState;
 use crate::app_state::AppState;
 use crate::commands::chat::send_chat_message_from_player;
-use crate::player::controller::handle_end_of_file;
 use crate::commands::connection::emit_error_message;
+use crate::player::controller::handle_end_of_file;
 use crate::player::controller::stop_player;
 
 pub struct MpvBackend {
@@ -136,11 +136,8 @@ impl PlayerBackend for MpvBackend {
     }
 
     async fn poll_state(&self) -> anyhow::Result<()> {
-        let cmd = MpvCommand::script_message_to(
-            "syncplayintf",
-            "get_paused_and_position",
-            Vec::new(),
-        );
+        let cmd =
+            MpvCommand::script_message_to("syncplayintf", "get_paused_and_position", Vec::new());
         let _ = self.ipc.send_command_async(cmd).await;
         Ok(())
     }
@@ -188,11 +185,7 @@ impl PlayerBackend for MpvBackend {
         self.ipc.show_osd(text, duration_ms)
     }
 
-    fn show_chat_message(
-        &self,
-        username: Option<&str>,
-        message: &str,
-    ) -> anyhow::Result<()> {
+    fn show_chat_message(&self, username: Option<&str>, message: &str) -> anyhow::Result<()> {
         let mut output = String::new();
         if let Some(name) = username {
             output.push('<');
@@ -203,11 +196,8 @@ impl PlayerBackend for MpvBackend {
         output.push_str(&sanitize_mpv_text(message));
         let ipc = self.ipc.clone();
         tokio::spawn(async move {
-            let cmd = MpvCommand::script_message_to(
-                "syncplayintf",
-                "chat",
-                vec![Value::String(output)],
-            );
+            let cmd =
+                MpvCommand::script_message_to("syncplayintf", "chat", vec![Value::String(output)]);
             let _ = ipc.send_command_async(cmd).await;
         });
         Ok(())
@@ -269,7 +259,7 @@ async fn handle_syncplayintf_line(
                     0,
                 ))
                 .await;
-            apply_osd_position(&ipc, &state).await;
+            apply_osd_position(ipc, &state).await;
         }
         return;
     }
@@ -313,7 +303,6 @@ async fn handle_syncplayintf_line(
     if line.contains("Error parsing option") || line.contains("Error parsing commandline option") {
         warn!("mpv reported an option parsing error: {}", line);
         ipc.set_ready(true);
-        return;
     }
     if line.contains("Failed")
         || line.contains("failed")
@@ -321,7 +310,6 @@ async fn handle_syncplayintf_line(
         || line.contains("error")
     {
         ipc.set_ready(true);
-        return;
     }
 }
 
@@ -440,9 +428,7 @@ fn build_syncplayintf_options(
         bool_value(config.user.chat_output_enabled)
     ));
 
-    let max_chat = server_features
-        .max_chat_message_length
-        .unwrap_or(150);
+    let max_chat = server_features.max_chat_message_length.unwrap_or(150);
     options.push(format!("MaxChatMessageLength={}", max_chat));
     options.push("inputPromptStartCharacter=〉".to_string());
     options.push("inputPromptEndCharacter= 〈".to_string());
@@ -477,7 +463,10 @@ async fn apply_osd_position(ipc: &Arc<MpvIpc>, state: &Arc<AppState>) {
     let should_move = config.user.chat_move_osd
         && (config.user.chat_output_enabled
             || (config.user.chat_input_enabled
-                && matches!(config.user.chat_input_position, crate::config::ChatInputPosition::Top)));
+                && matches!(
+                    config.user.chat_input_position,
+                    crate::config::ChatInputPosition::Top
+                )));
     if !should_move {
         return;
     }
@@ -502,7 +491,11 @@ fn recently_reset(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
         return false;
     };
     let mut ignore = MPV_NEWFILE_IGNORE_TIME;
-    if let Some(path) = player_state.path.as_deref().or(player_state.filename.as_deref()) {
+    if let Some(path) = player_state
+        .path
+        .as_deref()
+        .or(player_state.filename.as_deref())
+    {
         if is_url(path) {
             ignore += STREAM_ADDITIONAL_IGNORE_TIME;
         }

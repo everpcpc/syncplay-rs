@@ -759,7 +759,10 @@ fn should_allow_fastforward(state: &Arc<AppState>, config: &crate::config::Syncp
 }
 
 fn player_supports_speed(kind: crate::player::backend::PlayerKind) -> bool {
-    !matches!(kind, crate::player::backend::PlayerKind::MpcHc | crate::player::backend::PlayerKind::MpcBe)
+    !matches!(
+        kind,
+        crate::player::backend::PlayerKind::MpcHc | crate::player::backend::PlayerKind::MpcBe
+    )
 }
 
 pub(crate) fn emit_error_message(state: &Arc<AppState>, message: &str) {

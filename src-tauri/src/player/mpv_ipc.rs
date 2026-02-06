@@ -379,8 +379,8 @@ impl MpvIpc {
 }
 
 fn queue_key(cmd: &MpvCommand) -> Option<QueueKey> {
-    let Some(head) = cmd.command.get(0) else { return None };
-    let Some(head_str) = head.as_str() else { return None };
+    let head = cmd.command.first()?;
+    let head_str = head.as_str()?;
     match head_str {
         "set_property" => {
             if cmd.command.get(1).and_then(|v| v.as_str()) == Some("time-pos") {
@@ -411,7 +411,10 @@ async fn handle_command_queue(
     if let Some(key) = queue_key(&cmd) {
         match key {
             QueueKey::CyclePause => {
-                if let Some(pos) = pending.iter().position(|c| queue_key(c) == Some(QueueKey::CyclePause)) {
+                if let Some(pos) = pending
+                    .iter()
+                    .position(|c| queue_key(c) == Some(QueueKey::CyclePause))
+                {
                     pending.remove(pos);
                     return;
                 }

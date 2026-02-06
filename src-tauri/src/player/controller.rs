@@ -773,7 +773,10 @@ fn check_mpv_version(player_path: &str) -> Result<MpvVersionFlags, String> {
             .and_then(|m| m.as_str().parse::<u32>().ok())
             .unwrap_or(0);
         if major == 0 && minor < 23 {
-            return Err("This version of mpv is not compatible with Syncplay. Please use mpv >= 0.23.0.".to_string());
+            return Err(
+                "This version of mpv is not compatible with Syncplay. Please use mpv >= 0.23.0."
+                    .to_string(),
+            );
         }
         let osc_visibility_change_compatible = major > 0 || minor >= 28;
         return Ok(MpvVersionFlags {

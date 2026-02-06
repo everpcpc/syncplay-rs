@@ -79,43 +79,53 @@ mod win {
             let mpc_handle_clone = mpc_handle.clone();
             let (hwnd_tx, hwnd_rx) = mpsc::channel();
 
-            std::thread::spawn(move || {
-                unsafe {
-                    let class_name = widestr("MPCApiListener");
-                    let hinstance = GetModuleHandleW(PCWSTR(null()));
-                    let wc = WNDCLASSW {
-                        lpfnWndProc: Some(wndproc),
-                        hInstance: hinstance,
-                        lpszClassName: PCWSTR(class_name.as_ptr()),
-                        ..Default::default()
-                    };
-                    RegisterClassW(&wc);
-                    let hwnd = CreateWindowExW(
-                        Default::default(),
-                        PCWSTR(class_name.as_ptr()),
-                        PCWSTR(widestr("MPC Listener").as_ptr()),
-                        Default::default(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        HWND(0),
-                        None,
-                        hinstance,
-                        null(),
-                    );
-                    let boxed = Box::new(MpcListenerState { tx: tx.clone(), mpc_handle: mpc_handle_clone });
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
-                    let _ = hwnd_tx.send(hwnd);
-                    let mut msg = MSG::default();
-                    while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
-                        DispatchMessageW(&msg);
-                    }
+            std::thread::spawn(move || unsafe {
+                let class_name = widestr("MPCApiListener");
+                let hinstance = GetModuleHandleW(PCWSTR(null()));
+                let wc = WNDCLASSW {
+                    lpfnWndProc: Some(wndproc),
+                    hInstance: hinstance,
+                    lpszClassName: PCWSTR(class_name.as_ptr()),
+                    ..Default::default()
+                };
+                RegisterClassW(&wc);
+                let hwnd = CreateWindowExW(
+                    Default::default(),
+                    PCWSTR(class_name.as_ptr()),
+                    PCWSTR(widestr("MPC Listener").as_ptr()),
+                    Default::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    HWND(0),
+                    None,
+                    hinstance,
+                    null(),
+                );
+                let boxed = Box::new(MpcListenerState {
+                    tx: tx.clone(),
+                    mpc_handle: mpc_handle_clone,
+                });
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(boxed) as isize);
+                let _ = hwnd_tx.send(hwnd);
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                    DispatchMessageW(&msg);
                 }
             });
 
-            let hwnd = hwnd_rx.recv().map_err(|_| anyhow::anyhow!("Failed to create MPC listener window"))?;
-            Ok((Self { hwnd, mpc_handle, event_tx: tx }, rx))
+            let hwnd = hwnd_rx
+                .recv()
+                .map_err(|_| anyhow::anyhow!("Failed to create MPC listener window"))?;
+            Ok((
+                Self {
+                    hwnd,
+                    mpc_handle,
+                    event_tx: tx,
+                },
+                rx,
+            ))
         }
 
         pub fn hwnd(&self) -> HWND {
@@ -135,8 +145,14 @@ mod win {
             }
         }
 
-        pub fn send_command(&self, cmd: u32, payload: Option<CommandPayload>) -> anyhow::Result<()> {
-            let mpc_handle = self.mpc_handle().ok_or_else(|| anyhow::anyhow!("MPC handle not available"))?;
+        pub fn send_command(
+            &self,
+            cmd: u32,
+            payload: Option<CommandPayload>,
+        ) -> anyhow::Result<()> {
+            let mpc_handle = self
+                .mpc_handle()
+                .ok_or_else(|| anyhow::anyhow!("MPC handle not available"))?;
             let (ptr, len, _payload_guard) = build_payload(payload);
             let cds = COPYDATASTRUCT {
                 dwData: cmd as usize,
@@ -219,7 +235,10 @@ mod win {
     }
 
     fn widestr(value: &str) -> Vec<u16> {
-        OsStr::new(value).encode_wide().chain(std::iter::once(0)).collect()
+        OsStr::new(value)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     fn wide_ptr_to_string(ptr: *const u16, bytes: usize) -> String {
@@ -241,7 +260,11 @@ mod win {
     #[derive(Clone)]
     pub enum CommandPayload {
         Text(String),
-        Osd { message: String, duration_ms: i32, position: i32 },
+        Osd {
+            message: String,
+            duration_ms: i32,
+            position: i32,
+        },
         Raw(Vec<u8>),
     }
 
@@ -250,15 +273,28 @@ mod win {
         _raw: Option<Vec<u8>>,
     }
 
-    fn build_payload(payload: Option<CommandPayload>) -> (*const std::ffi::c_void, usize, PayloadGuard) {
+    fn build_payload(
+        payload: Option<CommandPayload>,
+    ) -> (*const std::ffi::c_void, usize, PayloadGuard) {
         match payload {
             Some(CommandPayload::Text(value)) => {
                 let wide = widestr(&value);
                 let ptr = wide.as_ptr() as *const std::ffi::c_void;
                 let len = wide.len() * 2;
-                (ptr, len, PayloadGuard { _wide: Some(wide), _raw: None })
+                (
+                    ptr,
+                    len,
+                    PayloadGuard {
+                        _wide: Some(wide),
+                        _raw: None,
+                    },
+                )
             }
-            Some(CommandPayload::Osd { message, duration_ms, position }) => {
+            Some(CommandPayload::Osd {
+                message,
+                duration_ms,
+                position,
+            }) => {
                 let wide = widestr(&message);
                 let mut raw = Vec::with_capacity(8 + wide.len() * 2);
                 raw.extend_from_slice(&position.to_le_bytes());
@@ -268,14 +304,35 @@ mod win {
                 }
                 let ptr = raw.as_ptr() as *const std::ffi::c_void;
                 let len = raw.len();
-                (ptr, len, PayloadGuard { _wide: None, _raw: Some(raw) })
+                (
+                    ptr,
+                    len,
+                    PayloadGuard {
+                        _wide: None,
+                        _raw: Some(raw),
+                    },
+                )
             }
             Some(CommandPayload::Raw(raw)) => {
                 let ptr = raw.as_ptr() as *const std::ffi::c_void;
                 let len = raw.len();
-                (ptr, len, PayloadGuard { _wide: None, _raw: Some(raw) })
+                (
+                    ptr,
+                    len,
+                    PayloadGuard {
+                        _wide: None,
+                        _raw: Some(raw),
+                    },
+                )
             }
-            None => (null(), 0, PayloadGuard { _wide: None, _raw: None }),
+            None => (
+                null(),
+                0,
+                PayloadGuard {
+                    _wide: None,
+                    _raw: None,
+                },
+            ),
         }
     }
 
@@ -295,9 +352,7 @@ mod win {
     pub struct MpcListener;
 
     impl MpcListener {
-        pub fn hwnd(&self) -> () {
-            ()
-        }
+        pub fn hwnd(&self) {}
 
         pub fn set_mpc_handle(&self, _hwnd: ()) {}
 
@@ -305,7 +360,11 @@ mod win {
             None
         }
 
-        pub fn send_command(&self, _cmd: u32, _payload: Option<CommandPayload>) -> anyhow::Result<()> {
+        pub fn send_command(
+            &self,
+            _cmd: u32,
+            _payload: Option<CommandPayload>,
+        ) -> anyhow::Result<()> {
             anyhow::bail!("MPC backend is only supported on Windows")
         }
     }
@@ -313,7 +372,11 @@ mod win {
     #[derive(Clone)]
     pub enum CommandPayload {
         Text(String),
-        Osd { message: String, duration_ms: i32, position: i32 },
+        Osd {
+            message: String,
+            duration_ms: i32,
+            position: i32,
+        },
         Raw(Vec<u8>),
     }
 
@@ -500,7 +563,10 @@ impl PlayerBackend for MpcApiBackend {
         if !self.file_ready() {
             return Err(anyhow::anyhow!("MPC file not ready"));
         }
-        self.send_command_retry(CMD_SETPOSITION, Some(CommandPayload::Text(position.to_string())))?;
+        self.send_command_retry(
+            CMD_SETPOSITION,
+            Some(CommandPayload::Text(position.to_string())),
+        )?;
         Ok(())
     }
 
@@ -673,13 +739,19 @@ fn meets_min_version(version: &str, min: &str) -> bool {
 
 fn is_switch_pause_version(version: &str) -> bool {
     let parts: Vec<&str> = version.split('.').collect();
-    parts.get(0) == Some(&"1") && parts.get(1) == Some(&"6") && parts.get(2) == Some(&"4")
+    parts.first() == Some(&"1") && parts.get(1) == Some(&"6") && parts.get(2) == Some(&"4")
 }
 
 fn min_version_message(kind: PlayerKind) -> String {
     match kind {
-        PlayerKind::MpcBe => format!("MPC version not sufficient, please use `mpc-be` >= `{}`", MPC_BE_MIN_VER),
-        _ => format!("MPC version not sufficient, please use `mpc-hc` >= `{}`", MPC_MIN_VER),
+        PlayerKind::MpcBe => format!(
+            "MPC version not sufficient, please use `mpc-be` >= `{}`",
+            MPC_BE_MIN_VER
+        ),
+        _ => format!(
+            "MPC version not sufficient, please use `mpc-hc` >= `{}`",
+            MPC_MIN_VER
+        ),
     }
 }
 

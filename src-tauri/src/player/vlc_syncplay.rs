@@ -1,6 +1,7 @@
 use super::backend::PlayerBackend;
 use super::properties::PlayerState;
 use async_trait::async_trait;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use rand::Rng;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,6 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex as TokioMutex;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, info, warn};
-use futures::StreamExt;
 
 const VLC_MIN_VERSION: &str = "2.2.1";
 const VLC_INTERFACE_VERSION: &str = "0.3.7";
@@ -38,9 +38,7 @@ struct Connection {
 impl Connection {
     async fn send_line(&self, line: &str) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
-        guard
-            .write_all(format!("{}\n", line).as_bytes())
-            .await?;
+        guard.write_all(format!("{}\n", line).as_bytes()).await?;
         guard.flush().await?;
         Ok(())
     }
@@ -91,7 +89,9 @@ impl VlcSyncplayBackend {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
-        let child = cmd.spawn().map_err(|e| anyhow::anyhow!("Failed to start VLC: {}", e))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to start VLC: {}", e))?;
 
         let stream = connect_with_retry(port).await?;
         let (read_half, write_half) = stream.into_split();
@@ -143,7 +143,9 @@ impl VlcSyncplayBackend {
             return;
         }
         let last_update = *self.last_position_update.lock();
-        let Some(last_update) = last_update else { return };
+        let Some(last_update) = last_update else {
+            return;
+        };
         let diff = last_update.elapsed().as_secs_f64();
         if diff > 0.1 {
             if let Some(position) = self.state.lock().position {
@@ -353,7 +355,10 @@ async fn handle_line(
         }
         "vlc-version" => {
             if !meets_min_version(&argument, VLC_MIN_VERSION) {
-                warn!("VLC version {} is below minimum {}", argument, VLC_MIN_VERSION);
+                warn!(
+                    "VLC version {} is below minimum {}",
+                    argument, VLC_MIN_VERSION
+                );
             }
         }
         _ => {}
@@ -382,7 +387,9 @@ async fn connect_with_retry(port: u16) -> anyhow::Result<TcpStream> {
             Ok(stream) => return Ok(stream),
             Err(_) => {
                 if start.elapsed() >= VLC_OPEN_MAX_WAIT_TIME {
-                    return Err(anyhow::anyhow!("Failed to connect to VLC syncplay interface"));
+                    return Err(anyhow::anyhow!(
+                        "Failed to connect to VLC syncplay interface"
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(300)).await;
             }
@@ -394,7 +401,7 @@ async fn connect_with_retry(port: u16) -> anyhow::Result<TcpStream> {
 fn build_vlc_extra_args(player_path: &str) -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
-        return vec!["--verbose=2".to_string(), "--no-file-logging".to_string()];
+        vec!["--verbose=2".to_string(), "--no-file-logging".to_string()]
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -437,7 +444,7 @@ fn resolve_vlc_paths(player_path: &str) -> anyhow::Result<(String, String)> {
             "{}/Library/Application Support/org.videolan.vlc/lua/intf/",
             std::env::var("HOME").unwrap_or_default()
         );
-        return Ok((intf, user));
+        Ok((intf, user))
     }
 
     #[cfg(target_os = "windows")]
@@ -445,11 +452,17 @@ fn resolve_vlc_paths(player_path: &str) -> anyhow::Result<(String, String)> {
         let player_path_str = player_path.to_string_lossy().to_string();
         let lower = player_path_str.to_ascii_lowercase();
         if lower.contains("vlcportable.exe") {
-            let base = player_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+            let base = player_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf();
             let intf = base.join("App/vlc/lua/intf/").to_string_lossy().to_string();
             return Ok((intf.clone(), intf));
         }
-        let base = player_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let base = player_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
         let intf = base.join("lua/intf/").to_string_lossy().to_string();
         let appdata = std::env::var("APPDATA").unwrap_or_default();
         let user = Path::new(&appdata)
@@ -508,12 +521,7 @@ fn encode_with_safe(input: &str, safe: &[u8]) -> String {
     let mut output = String::new();
     for b in input.as_bytes() {
         let c = *b;
-        if c.is_ascii_alphanumeric()
-            || c == b'-'
-            || c == b'_'
-            || c == b'.'
-            || safe.contains(&c)
-        {
+        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.' || safe.contains(&c) {
             output.push(c as char);
         } else if c == b' ' {
             output.push_str("%20");
