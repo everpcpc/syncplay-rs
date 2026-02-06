@@ -6,7 +6,6 @@ use crate::commands::playlist::{
 use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::messages::{FileInfo, PlayState, ProtocolMessage, ReadyState, SetMessage};
 use crate::player::backend::{player_kind_from_path_or_default, PlayerBackend, PlayerKind};
-use crate::player::events::{EndFileReason, MpvPlayerEvent};
 use crate::player::mpc_api::MpcApiBackend;
 use crate::player::mplayer_slave::MplayerBackend;
 use crate::player::mpv_backend::MpvBackend;
@@ -175,9 +174,10 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
                 Arc::downgrade(state),
                 osc_compatible,
                 stdout,
-            )) as Arc<dyn PlayerBackend>;
-            spawn_event_loop(state.clone(), event_rx);
-            (backend, child)
+            ));
+            backend.spawn_event_loop(event_rx);
+            let backend_dyn: Arc<dyn PlayerBackend> = backend.clone();
+            (backend_dyn, child)
         }
         PlayerKind::Vlc => {
             let (backend, child) = if should_spawn {
@@ -901,22 +901,6 @@ async fn wait_for_ipc_socket(
         sleep(Duration::from_millis(100)).await;
     }
     Err("Timed out waiting for MPV IPC socket".to_string())
-}
-
-fn spawn_event_loop(
-    state: Arc<AppState>,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<MpvPlayerEvent>,
-) {
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            if let MpvPlayerEvent::EndFile {
-                reason: EndFileReason::Eof,
-            } = event
-            {
-                handle_end_of_file(&state).await;
-            }
-        }
-    });
 }
 
 fn emit_player_state(state: &Arc<AppState>, player_state: &PlayerState) {

@@ -7,10 +7,12 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use super::backend::{PlayerBackend, PlayerKind};
 use super::commands::MpvCommand;
+use super::events::{EndFileReason, MpvPlayerEvent};
 use super::mpv_ipc::MpvIpc;
 use super::properties::PlayerState;
 use crate::app_state::AppState;
@@ -59,6 +61,39 @@ impl MpvBackend {
 
     pub fn ipc(&self) -> Arc<MpvIpc> {
         self.ipc.clone()
+    }
+
+    pub fn spawn_event_loop(self: &Arc<Self>, mut rx: mpsc::UnboundedReceiver<MpvPlayerEvent>) {
+        let ipc = self.ipc.clone();
+        let state = self.state.clone();
+        let file_loaded = self.file_loaded.clone();
+        let last_loaded = self.last_loaded.clone();
+        let osc_visibility_change_compatible = self.osc_visibility_change_compatible;
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    MpvPlayerEvent::EndFile {
+                        reason: EndFileReason::Eof,
+                    } => {
+                        if let Some(state) = state.upgrade() {
+                            handle_end_of_file(&state).await;
+                        }
+                    }
+                    MpvPlayerEvent::LogMessage(line) => {
+                        handle_syncplayintf_line(
+                            &ipc,
+                            &state,
+                            &file_loaded,
+                            &last_loaded,
+                            osc_visibility_change_compatible,
+                            &line,
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn spawn_stdout_reader(&self, stdout: ChildStdout) {
