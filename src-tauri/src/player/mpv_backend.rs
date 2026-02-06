@@ -119,6 +119,39 @@ impl MpvBackend {
             }
         });
     }
+
+    fn sync_file_loaded_state(&self) {
+        let Some(app_state) = self.state.upgrade() else {
+            return;
+        };
+        let state = self.ipc.get_state();
+        let has_file = state
+            .filename
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || state
+                .path
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+        let is_placeholder = is_placeholder_file(&app_state, &state);
+        let next_loaded = has_file && !is_placeholder;
+        let was_loaded = self.file_loaded.load(Ordering::SeqCst);
+
+        if next_loaded == was_loaded {
+            return;
+        }
+
+        self.file_loaded.store(next_loaded, Ordering::SeqCst);
+        if next_loaded {
+            *self.last_loaded.lock() = Some(Instant::now());
+            self.ipc.set_ready(true);
+        } else {
+            *self.last_loaded.lock() = None;
+            self.ipc.set_ready(false);
+        }
+    }
 }
 
 #[async_trait]
@@ -180,39 +213,6 @@ impl PlayerBackend for MpvBackend {
         }
         self.sync_file_loaded_state();
         Ok(())
-    }
-
-    fn sync_file_loaded_state(&self) {
-        let Some(app_state) = self.state.upgrade() else {
-            return;
-        };
-        let state = self.ipc.get_state();
-        let has_file = state
-            .filename
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-            || state
-                .path
-                .as_deref()
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(false);
-        let is_placeholder = is_placeholder_file(&app_state, &state);
-        let next_loaded = has_file && !is_placeholder;
-        let was_loaded = self.file_loaded.load(Ordering::SeqCst);
-
-        if next_loaded == was_loaded {
-            return;
-        }
-
-        self.file_loaded.store(next_loaded, Ordering::SeqCst);
-        if next_loaded {
-            *self.last_loaded.lock() = Some(Instant::now());
-            self.ipc.set_ready(true);
-        } else {
-            *self.last_loaded.lock() = None;
-            self.ipc.set_ready(false);
-        }
     }
 
     async fn set_position(&self, position: f64) -> anyhow::Result<()> {
