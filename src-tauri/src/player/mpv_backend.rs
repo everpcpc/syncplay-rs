@@ -1,26 +1,87 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::ChildStdout;
+use tracing::{debug, warn};
 
 use super::backend::{PlayerBackend, PlayerKind};
+use super::commands::MpvCommand;
 use super::mpv_ipc::MpvIpc;
 use super::properties::PlayerState;
+use crate::app_state::AppState;
+use crate::commands::chat::send_chat_message_from_player;
+use crate::commands::connection::emit_error_message;
+use crate::player::controller::handle_end_of_file;
+use crate::player::controller::stop_player;
 
 pub struct MpvBackend {
     kind: PlayerKind,
     ipc: Arc<MpvIpc>,
+    state: Weak<AppState>,
+    file_loaded: Arc<AtomicBool>,
+    last_loaded: Arc<Mutex<Option<Instant>>>,
+    osc_visibility_change_compatible: bool,
 }
 
+const MPV_NEWFILE_IGNORE_TIME: Duration = Duration::from_secs(1);
+const STREAM_ADDITIONAL_IGNORE_TIME: Duration = Duration::from_secs(10);
+const PLAYER_ASK_DELAY: Duration = Duration::from_millis(100);
+const MPV_UNRESPONSIVE_THRESHOLD: Duration = Duration::from_secs(60);
+const DO_NOT_RESET_POSITION_THRESHOLD: f64 = 1.0;
+const MPV_INPUT_BACKSLASH_SUBSTITUTE: &str = "＼";
+
 impl MpvBackend {
-    pub fn new(kind: PlayerKind, ipc: MpvIpc) -> Self {
-        Self {
+    pub fn new(
+        kind: PlayerKind,
+        ipc: MpvIpc,
+        state: Weak<AppState>,
+        osc_visibility_change_compatible: bool,
+        stdout: Option<ChildStdout>,
+    ) -> Self {
+        let backend = Self {
             kind,
             ipc: Arc::new(ipc),
+            state,
+            file_loaded: Arc::new(AtomicBool::new(false)),
+            last_loaded: Arc::new(Mutex::new(None)),
+            osc_visibility_change_compatible,
+        };
+        if let Some(stdout) = stdout {
+            backend.spawn_stdout_reader(stdout);
         }
+        backend
     }
 
     pub fn ipc(&self) -> Arc<MpvIpc> {
         self.ipc.clone()
+    }
+
+    fn spawn_stdout_reader(&self, stdout: ChildStdout) {
+        let ipc = self.ipc.clone();
+        let state = self.state.clone();
+        let file_loaded = self.file_loaded.clone();
+        let last_loaded = self.last_loaded.clone();
+        let osc_visibility_change_compatible = self.osc_visibility_change_compatible;
+        tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                handle_syncplayintf_line(
+                    &ipc,
+                    &state,
+                    &file_loaded,
+                    &last_loaded,
+                    osc_visibility_change_compatible,
+                    &line,
+                )
+                .await;
+            }
+        });
     }
 }
 
@@ -35,14 +96,60 @@ impl PlayerBackend for MpvBackend {
     }
 
     fn get_state(&self) -> PlayerState {
-        self.ipc.get_state()
+        let mut state = self.ipc.get_state();
+        let is_loaded = self.file_loaded.load(Ordering::SeqCst);
+        if let Some(app_state) = self.state.upgrade() {
+            if !is_loaded || recently_reset(&app_state, &state) {
+                let global = app_state.client_state.get_global_state();
+                state.position = Some(global.position);
+                state.paused = Some(global.paused);
+                return state;
+            }
+        }
+
+        if let Some(last_update) = self.ipc.last_position_update() {
+            let paused = state.paused.unwrap_or(true);
+            if !paused {
+                let diff = last_update.elapsed();
+                if diff > PLAYER_ASK_DELAY {
+                    if let Some(position) = state.position {
+                        state.position = Some(position + diff.as_secs_f64());
+                    }
+                }
+                if diff > MPV_UNRESPONSIVE_THRESHOLD {
+                    if let Some(app_state) = self.state.upgrade() {
+                        let message = format!(
+                            "mpv has not responded for {} seconds so appears to have malfunctioned. Please restart Syncplay.",
+                            diff.as_secs()
+                        );
+                        emit_error_message(&app_state, &message);
+                        let app_state_clone = app_state.clone();
+                        tokio::spawn(async move {
+                            let _ = stop_player(&app_state_clone).await;
+                        });
+                    }
+                }
+            }
+        }
+
+        state
     }
 
     async fn poll_state(&self) -> anyhow::Result<()> {
-        self.ipc.refresh_state().await
+        let cmd =
+            MpvCommand::script_message_to("syncplayintf", "get_paused_and_position", Vec::new());
+        let _ = self.ipc.send_command_async(cmd).await;
+        Ok(())
     }
 
     async fn set_position(&self, position: f64) -> anyhow::Result<()> {
+        if let Some(app_state) = self.state.upgrade() {
+            if position < DO_NOT_RESET_POSITION_THRESHOLD
+                && recently_reset(&app_state, &self.ipc.get_state())
+            {
+                return Ok(());
+            }
+        }
         self.ipc.set_position(position).await
     }
 
@@ -59,10 +166,350 @@ impl PlayerBackend for MpvBackend {
     }
 
     fn show_osd(&self, text: &str, duration_ms: Option<u64>) -> anyhow::Result<()> {
+        if let Some(state) = self.state.upgrade() {
+            let config = state.config.lock().clone();
+            if config.user.chat_output_enabled {
+                let message = text.replace('"', "'");
+                let ipc = self.ipc.clone();
+                tokio::spawn(async move {
+                    let cmd = MpvCommand::script_message_to(
+                        "syncplayintf",
+                        "notification-osd-neutral",
+                        vec![Value::String(message)],
+                    );
+                    let _ = ipc.send_command_async(cmd).await;
+                });
+                return Ok(());
+            }
+        }
         self.ipc.show_osd(text, duration_ms)
+    }
+
+    fn show_chat_message(&self, username: Option<&str>, message: &str) -> anyhow::Result<()> {
+        let mut output = String::new();
+        if let Some(name) = username {
+            output.push('<');
+            output.push_str(&sanitize_mpv_text(name));
+            output.push('>');
+            output.push(' ');
+        }
+        output.push_str(&sanitize_mpv_text(message));
+        let ipc = self.ipc.clone();
+        tokio::spawn(async move {
+            let cmd =
+                MpvCommand::script_message_to("syncplayintf", "chat", vec![Value::String(output)]);
+            let _ = ipc.send_command_async(cmd).await;
+        });
+        Ok(())
     }
 
     async fn shutdown(&self) -> anyhow::Result<()> {
         self.ipc.quit()
     }
+}
+
+async fn handle_syncplayintf_line(
+    ipc: &Arc<MpvIpc>,
+    state: &Weak<AppState>,
+    file_loaded: &Arc<AtomicBool>,
+    last_loaded: &Arc<Mutex<Option<Instant>>>,
+    osc_visibility_change_compatible: bool,
+    line: &str,
+) {
+    let mut line = line.trim().to_string();
+    line = line
+        .replace("[cplayer] ", "")
+        .replace("[term-msg] ", "")
+        .replace("   cplayer: ", "")
+        .replace("  term-msg: ", "");
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    debug!("mpv >> {}", line);
+    if line.contains("<chat>") {
+        if let Some(message) = extract_tag(line, "chat") {
+            let message = message.replace(MPV_INPUT_BACKSLASH_SUBSTITUTE, "\\");
+            if let Some(state) = state.upgrade() {
+                let _ = send_chat_message_from_player(&state, &message).await;
+            }
+        }
+        return;
+    }
+    if line.contains("<eof>") {
+        if let Some(state) = state.upgrade() {
+            handle_end_of_file(&state).await;
+        }
+        return;
+    }
+    if line.contains("<get_syncplayintf_options>") {
+        if let Some(state) = state.upgrade() {
+            let options = build_syncplayintf_options(&state, osc_visibility_change_compatible);
+            let cmd = MpvCommand::script_message_to(
+                "syncplayintf",
+                "set_syncplayintf_options",
+                vec![Value::String(options)],
+            );
+            let _ = ipc.send_command_async(cmd).await;
+            let socket = ipc.socket_path().to_string();
+            let _ = ipc
+                .send_command_async(MpvCommand::set_property(
+                    "input-ipc-server",
+                    Value::String(socket),
+                    0,
+                ))
+                .await;
+            apply_osd_position(ipc, &state).await;
+        }
+        return;
+    }
+    if line.contains("<SyncplayUpdateFile>") || line.contains("Playing:") {
+        file_loaded.store(false, Ordering::SeqCst);
+        *last_loaded.lock() = None;
+        ipc.set_ready(false);
+        return;
+    }
+    if line.contains("</SyncplayUpdateFile>") {
+        file_loaded.store(true, Ordering::SeqCst);
+        *last_loaded.lock() = Some(Instant::now());
+        ipc.set_ready(true);
+        if let Some(app_state) = state.upgrade() {
+            let ipc = ipc.clone();
+            tokio::spawn(async move {
+                let current = ipc.get_state();
+                if recently_reset(&app_state, &current) {
+                    return;
+                }
+                let global = app_state.client_state.get_global_state();
+                let _ = ipc.set_position(global.position).await;
+                let _ = ipc.set_paused(global.paused).await;
+            });
+        }
+        return;
+    }
+    if line.starts_with("ANS_") {
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim_start_matches("ANS_").to_ascii_lowercase();
+            ipc.update_from_term_playing_message(&key, value.trim());
+        }
+        return;
+    }
+    if line.contains("<paused=") && line.contains(", pos=") {
+        if let Some((paused, position)) = parse_pause_position(line) {
+            ipc.update_pause_and_position(paused, position);
+        }
+        return;
+    }
+    if line.contains("Error parsing option") || line.contains("Error parsing commandline option") {
+        warn!("mpv reported an option parsing error: {}", line);
+        ipc.set_ready(true);
+    }
+    if line.contains("Failed")
+        || line.contains("failed")
+        || line.contains("No video or audio streams selected")
+        || line.contains("error")
+    {
+        ipc.set_ready(true);
+    }
+}
+
+fn extract_tag(line: &str, tag: &str) -> Option<String> {
+    let start_tag = format!("<{}>", tag);
+    let end_tag = format!("</{}>", tag);
+    let start = line.find(&start_tag)? + start_tag.len();
+    let end = line.find(&end_tag)?;
+    Some(line[start..end].to_string())
+}
+
+fn parse_pause_position(line: &str) -> Option<(Option<bool>, Option<f64>)> {
+    let trimmed = line.trim_matches(|c| c == '<' || c == '>');
+    let mut paused = None;
+    let mut position = None;
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        if let Some(value) = part.strip_prefix("paused=") {
+            paused = match value {
+                "true" => Some(true),
+                "false" => Some(false),
+                "nil" => None,
+                _ => None,
+            };
+        } else if let Some(value) = part.strip_prefix("pos=") {
+            position = value.parse::<f64>().ok();
+        }
+    }
+    Some((paused, position))
+}
+
+fn build_syncplayintf_options(
+    state: &Arc<AppState>,
+    osc_visibility_change_compatible: bool,
+) -> String {
+    let config = state.config.lock().clone();
+    let server_features = state.server_features.lock().clone();
+    let mut options = Vec::new();
+
+    let bool_value = |value: bool| if value { "True" } else { "False" };
+
+    options.push(format!(
+        "chatInputEnabled={}",
+        bool_value(config.user.chat_input_enabled)
+    ));
+    options.push(format!(
+        "chatInputFontFamily={}",
+        config.user.chat_input_font_family
+    ));
+    options.push(format!(
+        "chatInputRelativeFontSize={}",
+        config.user.chat_input_relative_font_size
+    ));
+    options.push(format!(
+        "chatInputFontWeight={}",
+        config.user.chat_input_font_weight
+    ));
+    options.push(format!(
+        "chatInputFontUnderline={}",
+        bool_value(config.user.chat_input_font_underline)
+    ));
+    options.push(format!(
+        "chatInputFontColor={}",
+        config.user.chat_input_font_color
+    ));
+    options.push(format!(
+        "chatInputPosition={}",
+        match config.user.chat_input_position {
+            crate::config::ChatInputPosition::Top => "Top",
+            crate::config::ChatInputPosition::Middle => "Middle",
+            crate::config::ChatInputPosition::Bottom => "Bottom",
+        }
+    ));
+    options.push(format!(
+        "chatOutputFontFamily={}",
+        config.user.chat_output_font_family
+    ));
+    options.push(format!(
+        "chatOutputRelativeFontSize={}",
+        config.user.chat_output_relative_font_size
+    ));
+    options.push(format!(
+        "chatOutputFontWeight={}",
+        config.user.chat_output_font_weight
+    ));
+    options.push(format!(
+        "chatOutputFontUnderline={}",
+        bool_value(config.user.chat_output_font_underline)
+    ));
+    options.push(format!(
+        "chatOutputMode={}",
+        match config.user.chat_output_mode {
+            crate::config::ChatOutputMode::Chatroom => "Chatroom",
+            crate::config::ChatOutputMode::Scrolling => "Scrolling",
+        }
+    ));
+    options.push(format!("chatMaxLines={}", config.user.chat_max_lines));
+    options.push(format!("chatTopMargin={}", config.user.chat_top_margin));
+    options.push(format!("chatLeftMargin={}", config.user.chat_left_margin));
+    options.push(format!(
+        "chatBottomMargin={}",
+        config.user.chat_bottom_margin
+    ));
+    options.push(format!(
+        "chatDirectInput={}",
+        bool_value(config.user.chat_direct_input)
+    ));
+    options.push(format!(
+        "notificationTimeout={}",
+        config.user.notification_timeout
+    ));
+    options.push(format!("alertTimeout={}", config.user.alert_timeout));
+    options.push(format!("chatTimeout={}", config.user.chat_timeout));
+    options.push(format!(
+        "chatOutputEnabled={}",
+        bool_value(config.user.chat_output_enabled)
+    ));
+
+    let max_chat = server_features.max_chat_message_length.unwrap_or(150);
+    options.push(format!("MaxChatMessageLength={}", max_chat));
+    options.push("inputPromptStartCharacter=〉".to_string());
+    options.push("inputPromptEndCharacter= 〈".to_string());
+    options.push("backslashSubstituteCharacter=＼".to_string());
+
+    options.push(format!(
+        "mpv-key-tab-hint={}",
+        "[TAB] to toggle access to alphabet row key shortcuts."
+    ));
+    options.push(format!(
+        "mpv-key-hint={}",
+        "[ENTER] to send message. [ESC] to escape chat mode."
+    ));
+    options.push(format!(
+        "alphakey-mode-warning-first-line={}",
+        "You can temporarily use old mpv bindings with a-z keys."
+    ));
+    options.push(format!(
+        "alphakey-mode-warning-second-line={}",
+        "Press [TAB] to return to Syncplay chat mode."
+    ));
+    options.push(format!(
+        "OscVisibilityChangeCompatible={}",
+        bool_value(osc_visibility_change_compatible)
+    ));
+
+    options.join(", ")
+}
+
+async fn apply_osd_position(ipc: &Arc<MpvIpc>, state: &Arc<AppState>) {
+    let config = state.config.lock().clone();
+    let should_move = config.user.chat_move_osd
+        && (config.user.chat_output_enabled
+            || (config.user.chat_input_enabled
+                && matches!(
+                    config.user.chat_input_position,
+                    crate::config::ChatInputPosition::Top
+                )));
+    if !should_move {
+        return;
+    }
+    let _ = ipc
+        .send_command_async(MpvCommand::set_property(
+            "osd-align-y",
+            Value::String("bottom".to_string()),
+            0,
+        ))
+        .await;
+    let _ = ipc
+        .send_command_async(MpvCommand::set_property(
+            "osd-margin-y",
+            Value::Number(serde_json::Number::from(config.user.chat_osd_margin)),
+            0,
+        ))
+        .await;
+}
+
+fn recently_reset(state: &Arc<AppState>, player_state: &PlayerState) -> bool {
+    let Some(last_rewind) = *state.last_rewind_time.lock() else {
+        return false;
+    };
+    let mut ignore = MPV_NEWFILE_IGNORE_TIME;
+    if let Some(path) = player_state
+        .path
+        .as_deref()
+        .or(player_state.filename.as_deref())
+    {
+        if is_url(path) {
+            ignore += STREAM_ADDITIONAL_IGNORE_TIME;
+        }
+    }
+    last_rewind.elapsed() < ignore
+}
+
+fn is_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+fn sanitize_mpv_text(input: &str) -> String {
+    let mut text = input.replace("\r", "").replace("\n", "\\n");
+    text = text.replace('\\', MPV_INPUT_BACKSLASH_SUBSTITUTE);
+    text = text.replace('"', "'");
+    text
 }

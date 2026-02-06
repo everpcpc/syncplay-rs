@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -17,23 +18,40 @@ use super::commands::{MpvCommand, MpvMessage, MpvResponse};
 use super::events::MpvPlayerEvent;
 use super::properties::{PlayerState, PropertyId};
 
+const MPV_SENDMESSAGE_COOLDOWN_TIME: Duration = Duration::from_millis(50);
+const MPV_MAX_NEWFILE_COOLDOWN_TIME: Duration = Duration::from_secs(3);
+
+enum QueueMessage {
+    Command(MpvCommand),
+    SetReady(bool),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueueKey {
+    SetTimePos,
+    LoadFile,
+    CyclePause,
+}
+
 /// MPV IPC client
 pub struct MpvIpc {
     socket_path: String,
-    tx: Option<mpsc::UnboundedSender<MpvCommand>>,
+    queue_tx: Option<mpsc::UnboundedSender<QueueMessage>>,
     state: Arc<Mutex<PlayerState>>,
     next_request_id: Arc<Mutex<u64>>,
     pending_requests: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<MpvResponse>>>>,
+    last_position_update: Arc<Mutex<Option<Instant>>>,
 }
 
 impl MpvIpc {
     pub fn new(socket_path: impl Into<String>) -> Self {
         Self {
             socket_path: socket_path.into(),
-            tx: None,
+            queue_tx: None,
             state: Arc::new(Mutex::new(PlayerState::default())),
             next_request_id: Arc::new(Mutex::new(1)),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            last_position_update: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -58,13 +76,15 @@ impl MpvIpc {
         let reader = BufReader::new(read_half);
 
         // Create channels
+        let (queue_tx, mut queue_rx) = mpsc::unbounded_channel::<QueueMessage>();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<MpvCommand>();
         let (event_tx, event_rx) = mpsc::unbounded_channel::<MpvPlayerEvent>();
 
-        self.tx = Some(cmd_tx);
+        self.queue_tx = Some(queue_tx.clone());
 
         let state = Arc::clone(&self.state);
         let pending_requests = Arc::clone(&self.pending_requests);
+        let last_position_update = Arc::clone(&self.last_position_update);
 
         // Spawn write task
         tokio::spawn(async move {
@@ -88,6 +108,48 @@ impl MpvIpc {
                 }
             }
             debug!("MPV write task terminated");
+        });
+
+        // Spawn queue task
+        tokio::spawn(async move {
+            let mut pending: Vec<MpvCommand> = Vec::new();
+            let mut ready = true;
+            let mut last_send: Option<Instant> = None;
+            let mut last_not_ready: Option<Instant> = None;
+            let mut interval = tokio::time::interval(Duration::from_millis(200));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if !ready {
+                            if let Some(last) = last_not_ready {
+                                if last.elapsed() >= MPV_MAX_NEWFILE_COOLDOWN_TIME {
+                                    ready = true;
+                                    last_not_ready = None;
+                                    flush_queue(&mut pending, &mut last_send, &cmd_tx).await;
+                                }
+                            }
+                        }
+                    }
+                    Some(message) = queue_rx.recv() => {
+                        match message {
+                            QueueMessage::Command(cmd) => {
+                                handle_command_queue(cmd, &mut pending, ready, &mut last_send, &cmd_tx).await;
+                            }
+                            QueueMessage::SetReady(new_ready) => {
+                                if new_ready {
+                                    ready = true;
+                                    last_not_ready = None;
+                                    flush_queue(&mut pending, &mut last_send, &cmd_tx).await;
+                                } else {
+                                    ready = false;
+                                    last_not_ready = Some(Instant::now());
+                                }
+                            }
+                        }
+                    }
+                    else => break,
+                }
+            }
         });
 
         // Spawn read task
@@ -121,6 +183,9 @@ impl MpvIpc {
                             if let Some(id) = event.id {
                                 if let Some(prop_id) = PropertyId::from_u64(id) {
                                     let value = event.data.unwrap_or(serde_json::Value::Null);
+                                    if prop_id == PropertyId::TimePos && !value.is_null() {
+                                        *last_position_update.lock() = Some(Instant::now());
+                                    }
                                     state.lock().update_property(prop_id, &value);
                                 }
                             }
@@ -180,6 +245,9 @@ impl MpvIpc {
             let cmd = MpvCommand::get_property(prop.property_name(), 0);
             let response = self.send_command_async(cmd).await?;
             if let Some(data) = response.data {
+                if prop == PropertyId::TimePos && !data.is_null() {
+                    *self.last_position_update.lock() = Some(Instant::now());
+                }
                 self.state.lock().update_property(prop, &data);
             }
         }
@@ -189,11 +257,18 @@ impl MpvIpc {
 
     /// Send a command without waiting for response
     fn send_command(&self, cmd: MpvCommand) -> Result<()> {
-        if let Some(tx) = &self.tx {
-            tx.send(cmd).context("Failed to send command to MPV")?;
+        if let Some(tx) = &self.queue_tx {
+            tx.send(QueueMessage::Command(cmd))
+                .context("Failed to send command to MPV")?;
             Ok(())
         } else {
             anyhow::bail!("Not connected to MPV");
+        }
+    }
+
+    pub fn set_ready(&self, ready: bool) {
+        if let Some(tx) = &self.queue_tx {
+            let _ = tx.send(QueueMessage::SetReady(ready));
         }
     }
 
@@ -265,5 +340,120 @@ impl MpvIpc {
     pub fn quit(&self) -> Result<()> {
         let cmd = MpvCommand::quit();
         self.send_command(cmd)
+    }
+
+    pub fn update_from_term_playing_message(&self, key: &str, value: &str) {
+        let mut state = self.state.lock();
+        match key {
+            "filename" => {
+                state.filename = Some(value.to_string());
+            }
+            "length" | "duration" => {
+                state.duration = value.parse::<f64>().ok();
+            }
+            "path" => {
+                state.path = Some(value.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    pub fn update_pause_and_position(&self, paused: Option<bool>, position: Option<f64>) {
+        let mut state = self.state.lock();
+        if let Some(paused) = paused {
+            state.paused = Some(paused);
+        }
+        if let Some(position) = position {
+            state.position = Some(position);
+            *self.last_position_update.lock() = Some(Instant::now());
+        }
+    }
+
+    pub fn last_position_update(&self) -> Option<Instant> {
+        *self.last_position_update.lock()
+    }
+
+    pub fn socket_path(&self) -> &str {
+        &self.socket_path
+    }
+}
+
+fn queue_key(cmd: &MpvCommand) -> Option<QueueKey> {
+    let head = cmd.command.first()?;
+    let head_str = head.as_str()?;
+    match head_str {
+        "set_property" => {
+            if cmd.command.get(1).and_then(|v| v.as_str()) == Some("time-pos") {
+                Some(QueueKey::SetTimePos)
+            } else {
+                None
+            }
+        }
+        "loadfile" => Some(QueueKey::LoadFile),
+        "cycle" => {
+            if cmd.command.get(1).and_then(|v| v.as_str()) == Some("pause") {
+                Some(QueueKey::CyclePause)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+async fn handle_command_queue(
+    cmd: MpvCommand,
+    pending: &mut Vec<MpvCommand>,
+    ready: bool,
+    last_send: &mut Option<Instant>,
+    cmd_tx: &mpsc::UnboundedSender<MpvCommand>,
+) {
+    if let Some(key) = queue_key(&cmd) {
+        match key {
+            QueueKey::CyclePause => {
+                if let Some(pos) = pending
+                    .iter()
+                    .position(|c| queue_key(c) == Some(QueueKey::CyclePause))
+                {
+                    pending.remove(pos);
+                    return;
+                }
+            }
+            QueueKey::SetTimePos | QueueKey::LoadFile => {
+                pending.retain(|c| queue_key(c) != Some(key));
+            }
+        }
+    }
+
+    if ready {
+        send_with_throttle(cmd, last_send, cmd_tx).await;
+    } else {
+        pending.push(cmd);
+    }
+}
+
+async fn flush_queue(
+    pending: &mut Vec<MpvCommand>,
+    last_send: &mut Option<Instant>,
+    cmd_tx: &mpsc::UnboundedSender<MpvCommand>,
+) {
+    while let Some(cmd) = pending.pop() {
+        send_with_throttle(cmd, last_send, cmd_tx).await;
+    }
+}
+
+async fn send_with_throttle(
+    cmd: MpvCommand,
+    last_send: &mut Option<Instant>,
+    cmd_tx: &mpsc::UnboundedSender<MpvCommand>,
+) {
+    if let Some(last) = last_send {
+        let elapsed = last.elapsed();
+        if elapsed < MPV_SENDMESSAGE_COOLDOWN_TIME {
+            tokio::time::sleep(MPV_SENDMESSAGE_COOLDOWN_TIME - elapsed).await;
+        }
+    }
+    if cmd_tx.send(cmd).is_ok() {
+        *last_send = Some(Instant::now());
     }
 }

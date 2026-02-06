@@ -48,10 +48,23 @@ impl MplayerBackend {
             "Starting player: kind=Mplayer, path={}, args={:?}, initial_file={:?}",
             player_path, args, initial_file
         );
+        #[allow(unused_mut)]
+        let mut launch_file = initial_file.map(|s| s.to_string());
+        #[allow(unused_mut)]
+        let mut delayed_file: Option<String> = None;
+        #[cfg(windows)]
+        {
+            if let Some(path) = launch_file.as_ref() {
+                if !path.is_ascii() {
+                    delayed_file = launch_file.take();
+                }
+            }
+        }
+
         let mut cmd = Command::new(player_path);
         cmd.args(MPLAYER_ARGS);
         cmd.args(args);
-        if let Some(path) = initial_file {
+        if let Some(path) = launch_file.as_ref() {
             cmd.arg(path);
         }
         cmd.stdin(std::process::Stdio::piped())
@@ -86,6 +99,10 @@ impl MplayerBackend {
             stdin: Arc::new(TokioMutex::new(stdin)),
             state,
         };
+
+        if let Some(path) = delayed_file {
+            let _ = backend.load_file(&path).await;
+        }
 
         Ok((backend, child))
     }
@@ -177,6 +194,9 @@ impl PlayerBackend for MplayerBackend {
         }
         if let Err(e) = self.send_command("get_file_name").await {
             warn!("Failed to request filename: {}", e);
+        }
+        if let Err(e) = self.send_command("get_property path").await {
+            warn!("Failed to request filepath: {}", e);
         }
         if let Err(e) = self.send_command("get_property pause").await {
             warn!("Failed to request pause state: {}", e);

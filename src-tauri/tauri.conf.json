@@ -40,7 +40,9 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": [
-      "resources/placeholder.png"
+      "resources/placeholder.png",
+      "resources/syncplay.lua",
+      "resources/syncplayintf.lua"
     ],
     "icon": [
       "icons/32x32.png",

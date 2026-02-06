@@ -7,16 +7,17 @@ use crate::config::{SyncplayConfig, UnpauseAction};
 use crate::network::messages::{FileInfo, PlayState, ProtocolMessage, ReadyState, SetMessage};
 use crate::player::backend::{player_kind_from_path_or_default, PlayerBackend, PlayerKind};
 use crate::player::events::{EndFileReason, MpvPlayerEvent};
-use crate::player::mpc_web::MpcWebBackend;
+use crate::player::mpc_api::MpcApiBackend;
 use crate::player::mplayer_slave::MplayerBackend;
 use crate::player::mpv_backend::MpvBackend;
 use crate::player::mpv_ipc::MpvIpc;
 use crate::player::properties::PlayerState;
-use crate::player::vlc_rc::VlcBackend;
+use crate::player::vlc_syncplay::VlcSyncplayBackend;
 use crate::utils::{
     apply_privacy, is_music_file, is_trustable_and_trusted, is_url, same_filename, truncate_text,
     PRIVACY_HIDDEN_FILENAME,
 };
+use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -74,6 +75,7 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
     let kind = player_kind_from_path_or_default(&player_path);
     let args = build_player_arguments(&config, &player_path);
     let socket_path = ensure_mpv_socket_path(state)?;
+    let syncplayintf_path = resolve_syncplayintf_path(state);
     {
         let mut process_guard = state.player_process.lock();
         if let Some(child) = process_guard.as_mut() {
@@ -101,6 +103,7 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
                             kind,
                             &args,
                             &socket_path,
+                            syncplayintf_path.as_ref(),
                         )?;
                         match spawned {
                             Some(mut spawned_child) => {
@@ -141,6 +144,7 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
                         kind,
                         &args,
                         &socket_path,
+                        syncplayintf_path.as_ref(),
                     )?;
                 }
             }
@@ -159,13 +163,26 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
                     }
                 }
             };
-            let backend = Arc::new(MpvBackend::new(kind, mpv)) as Arc<dyn PlayerBackend>;
+            let stdout = child.as_mut().and_then(|process| process.stdout.take());
+            let osc_compatible = match kind {
+                PlayerKind::Iina => true,
+                _ => check_mpv_version(&player_path)?.osc_visibility_change_compatible,
+            };
+            let backend = Arc::new(MpvBackend::new(
+                kind,
+                mpv,
+                Arc::downgrade(state),
+                osc_compatible,
+                stdout,
+            )) as Arc<dyn PlayerBackend>;
             spawn_event_loop(state.clone(), event_rx);
             (backend, child)
         }
         PlayerKind::Vlc => {
             let (backend, child) = if should_spawn {
-                VlcBackend::start(&player_path, &args, None)
+                let lua_path = resolve_syncplay_lua_path(state)
+                    .ok_or_else(|| "Syncplay VLC interface not found".to_string())?;
+                VlcSyncplayBackend::start(&player_path, &args, None, lua_path)
                     .await
                     .map_err(|e| e.to_string())?
             } else {
@@ -185,7 +202,14 @@ pub async fn ensure_player_connected(state: &Arc<AppState>) -> Result<(), String
         }
         PlayerKind::MpcHc | PlayerKind::MpcBe => {
             let (backend, child) = if should_spawn {
-                MpcWebBackend::start(kind, &player_path, &args, None)
+                let mut mpc_args = args.clone();
+                if !mpc_args.iter().any(|arg| arg.eq_ignore_ascii_case("/open")) {
+                    mpc_args.push("/open".to_string());
+                }
+                if !mpc_args.iter().any(|arg| arg.eq_ignore_ascii_case("/new")) {
+                    mpc_args.push("/new".to_string());
+                }
+                MpcApiBackend::start(kind, &player_path, &mpc_args, None)
                     .await
                     .map_err(|e| e.to_string())?
             } else {
@@ -275,6 +299,11 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                     *suppress_guard = false;
                 } else {
                     send_file_update(&state, &player_state);
+                }
+                if matches!(player.kind(), PlayerKind::MpcHc | PlayerKind::MpcBe) {
+                    sync_mpc_after_file_change(state.clone(), player.clone());
+                } else if matches!(player.kind(), PlayerKind::Vlc | PlayerKind::Mplayer) {
+                    sync_generic_after_file_change(state.clone(), player.clone());
                 }
             }
 
@@ -486,6 +515,27 @@ fn schedule_file_update_after_load(state: Arc<AppState>) {
     });
 }
 
+fn sync_mpc_after_file_change(state: Arc<AppState>, player: Arc<dyn PlayerBackend>) {
+    tokio::spawn(async move {
+        let global = state.client_state.get_global_state();
+        for _ in 0..3 {
+            let _ = player.set_paused(true).await;
+            sleep(Duration::from_millis(10)).await;
+        }
+        sleep(Duration::from_millis(50)).await;
+        let _ = player.set_paused(global.paused).await;
+        let _ = player.set_position(global.position).await;
+    });
+}
+
+fn sync_generic_after_file_change(state: Arc<AppState>, player: Arc<dyn PlayerBackend>) {
+    tokio::spawn(async move {
+        let global = state.client_state.get_global_state();
+        let _ = player.set_paused(global.paused).await;
+        let _ = player.set_position(global.position).await;
+    });
+}
+
 pub fn resolve_media_path(media_directories: &[String], filename: &str) -> Option<PathBuf> {
     if filename == PRIVACY_HIDDEN_FILENAME {
         return None;
@@ -646,6 +696,98 @@ fn resolve_placeholder_path(state: &AppState) -> Option<PathBuf> {
     None
 }
 
+fn resolve_syncplay_lua_path(state: &AppState) -> Option<PathBuf> {
+    let candidates = [
+        "resources/syncplay.lua",
+        "syncplay.lua",
+        "src-tauri/resources/syncplay.lua",
+    ];
+    if let Some(handle) = state.app_handle.lock().clone() {
+        for name in candidates {
+            if let Ok(path) = handle
+                .path()
+                .resolve(name, tauri::path::BaseDirectory::Resource)
+            {
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    let cwd = std::env::current_dir().ok()?;
+    for name in candidates {
+        let path = cwd.join(name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn resolve_syncplayintf_path(state: &AppState) -> Option<PathBuf> {
+    let candidates = [
+        "resources/syncplayintf.lua",
+        "syncplayintf.lua",
+        "src-tauri/resources/syncplayintf.lua",
+    ];
+    if let Some(handle) = state.app_handle.lock().clone() {
+        for name in candidates {
+            if let Ok(path) = handle
+                .path()
+                .resolve(name, tauri::path::BaseDirectory::Resource)
+            {
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    let cwd = std::env::current_dir().ok()?;
+    for name in candidates {
+        let path = cwd.join(name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+struct MpvVersionFlags {
+    osc_visibility_change_compatible: bool,
+}
+
+fn check_mpv_version(player_path: &str) -> Result<MpvVersionFlags, String> {
+    let output = std::process::Command::new(player_path)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("Failed to run mpv for version check: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let re = Regex::new(r"mpv\s+(\d+)\.(\d+)\.").map_err(|e| e.to_string())?;
+    if let Some(captures) = re.captures(&stdout) {
+        let major = captures
+            .get(1)
+            .and_then(|m| m.as_str().parse::<u32>().ok())
+            .unwrap_or(0);
+        let minor = captures
+            .get(2)
+            .and_then(|m| m.as_str().parse::<u32>().ok())
+            .unwrap_or(0);
+        if major == 0 && minor < 23 {
+            return Err(
+                "This version of mpv is not compatible with Syncplay. Please use mpv >= 0.23.0."
+                    .to_string(),
+            );
+        }
+        let osc_visibility_change_compatible = major > 0 || minor >= 28;
+        return Ok(MpvVersionFlags {
+            osc_visibility_change_compatible,
+        });
+    }
+    Ok(MpvVersionFlags {
+        osc_visibility_change_compatible: false,
+    })
+}
+
 fn should_spawn_player(state: &AppState, kind: PlayerKind) -> bool {
     if kind != PlayerKind::Iina {
         return true;
@@ -665,6 +807,7 @@ fn start_mpv_process_if_needed(
     kind: PlayerKind,
     args: &[String],
     socket_path: &str,
+    syncplayintf_path: Option<&PathBuf>,
 ) -> Result<Option<tokio::process::Child>, String> {
     let should_start = {
         let mut process_guard = state.player_process.lock();
@@ -685,6 +828,7 @@ fn start_mpv_process_if_needed(
     let mut cmd = Command::new(player_path);
     let launch_args = args.to_vec();
     let mut full_args = Vec::new();
+    let term_playing_msg = "<SyncplayUpdateFile>\nANS_filename=${filename}\nANS_length=${=duration:${=length:0}}\nANS_path=${path}\n</SyncplayUpdateFile>";
     match kind {
         PlayerKind::Iina => {
             full_args.push("--no-stdin".to_string());
@@ -700,6 +844,10 @@ fn start_mpv_process_if_needed(
             full_args.push("--mpv-hr-seek=always".to_string());
             full_args.push("--mpv-force-window=yes".to_string());
             full_args.push(format!("--mpv-input-ipc-server={}", socket_path));
+            full_args.push(format!("--mpv-term-playing-msg={}", term_playing_msg));
+            if let Some(script_path) = syncplayintf_path {
+                full_args.push(format!("--mpv-script={}", script_path.to_string_lossy()));
+            }
         }
         _ => {
             full_args.push("--force-window=yes".to_string());
@@ -708,14 +856,20 @@ fn start_mpv_process_if_needed(
             full_args.push("--keep-open-pause=yes".to_string());
             full_args.push("--hr-seek=always".to_string());
             full_args.push("--input-terminal=no".to_string());
-            full_args.push("--no-terminal".to_string());
             full_args.push(format!("--input-ipc-server={}", socket_path));
+            full_args.push(format!("--term-playing-msg={}", term_playing_msg));
+            if let Some(script_path) = syncplayintf_path {
+                full_args.push(format!("--script={}", script_path.to_string_lossy()));
+            }
+            if kind == PlayerKind::MpvNet {
+                full_args.push("--auto-load-folder=no".to_string());
+            }
         }
     }
     full_args.extend(launch_args.clone());
     cmd.args(&full_args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
     info!(
@@ -1083,7 +1237,7 @@ pub fn playlist_item_available(state: &Arc<AppState>, filename: &str) -> bool {
     resolve_media_path(&media_directories, filename).is_some()
 }
 
-async fn handle_end_of_file(state: &Arc<AppState>) {
+pub(crate) async fn handle_end_of_file(state: &Arc<AppState>) {
     if state
         .playlist
         .not_just_changed(PLAYLIST_LOAD_NEXT_FILE_TIME_FROM_END_THRESHOLD)
