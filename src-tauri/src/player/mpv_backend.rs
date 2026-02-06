@@ -262,6 +262,15 @@ async fn handle_syncplayintf_line(
         return;
     }
     debug!("mpv >> {}", line);
+    if line.contains("Failed to get value of property") || line.contains("=(unavailable)") {
+        let ipc = ipc.clone();
+        tokio::spawn(async move {
+            if let Err(err) = ipc.refresh_state().await {
+                warn!("Failed to refresh mpv properties: {}", err);
+            }
+        });
+        return;
+    }
     if line.contains("<chat>") {
         if let Some(message) = extract_tag(line, "chat") {
             let message = message.replace(MPV_INPUT_BACKSLASH_SUBSTITUTE, "\\");
@@ -325,7 +334,17 @@ async fn handle_syncplayintf_line(
     if line.starts_with("ANS_") {
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim_start_matches("ANS_").to_ascii_lowercase();
-            ipc.update_from_term_playing_message(&key, value.trim());
+            let value = value.trim();
+            if value.is_empty() {
+                let ipc = ipc.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = ipc.refresh_state().await {
+                        warn!("Failed to refresh mpv properties: {}", err);
+                    }
+                });
+                return;
+            }
+            ipc.update_from_term_playing_message(&key, value);
         }
         return;
     }
