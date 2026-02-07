@@ -839,6 +839,12 @@ fn start_mpv_process_if_needed(
     let term_playing_msg = "<SyncplayUpdateFile>\nANS_filename=${filename}\nANS_length=${=duration:${=length:0}}\nANS_path=${path}\n</SyncplayUpdateFile>";
     match kind {
         PlayerKind::Iina => {
+            let has_sub_auto = launch_args
+                .iter()
+                .any(|arg| arg.starts_with("--mpv-sub-auto") || arg.starts_with("--sub-auto"));
+            let has_sid = launch_args
+                .iter()
+                .any(|arg| arg.starts_with("--mpv-sid") || arg.starts_with("--sid"));
             full_args.push("--no-stdin".to_string());
             if let Some(placeholder) = resolve_placeholder_path(state) {
                 full_args.push(placeholder.to_string_lossy().to_string());
@@ -853,6 +859,12 @@ fn start_mpv_process_if_needed(
             full_args.push("--mpv-force-window=yes".to_string());
             full_args.push(format!("--mpv-input-ipc-server={}", socket_path));
             full_args.push(format!("--mpv-term-playing-msg={}", term_playing_msg));
+            if !has_sub_auto {
+                full_args.push("--mpv-sub-auto=fuzzy".to_string());
+            }
+            if !has_sid {
+                full_args.push("--mpv-sid=auto".to_string());
+            }
             if let Some(script_path) = syncplayintf_path {
                 full_args.push(format!("--mpv-script={}", script_path.to_string_lossy()));
             }
