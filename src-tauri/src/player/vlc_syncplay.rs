@@ -136,7 +136,6 @@ impl VlcSyncplayBackend {
         self.connection.send_line("get-filename").await?;
         Ok(())
     }
-
 }
 
 #[async_trait]
@@ -165,11 +164,9 @@ impl PlayerBackend for VlcSyncplayBackend {
             }
         }
         if snapshot.paused == Some(false) {
-            if let (Some(duration), Some(position), Some(last_update)) = (
-                snapshot.duration,
-                base_position,
-                last_update,
-            ) {
+            if let (Some(duration), Some(position), Some(last_update)) =
+                (snapshot.duration, base_position, last_update)
+            {
                 if duration > 10.0
                     && duration - position < 2.0
                     && last_update.elapsed().as_secs_f64() > VLC_LATENCY_ERROR_THRESHOLD
