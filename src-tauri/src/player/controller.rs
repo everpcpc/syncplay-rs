@@ -839,11 +839,12 @@ fn start_mpv_process_if_needed(
     let term_playing_msg = "<SyncplayUpdateFile>\nANS_filename=${filename}\nANS_length=${=duration:${=length:0}}\nANS_path=${path}\n</SyncplayUpdateFile>";
     match kind {
         PlayerKind::Iina => {
-            let has_sub_auto = launch_args.iter().any(|arg| {
-                arg.starts_with("--mpv-sub-auto") || arg.starts_with("--sub-auto")
-            });
-            let has_sid =
-                launch_args.iter().any(|arg| arg.starts_with("--mpv-sid") || arg.starts_with("--sid"));
+            let has_sub_auto = launch_args
+                .iter()
+                .any(|arg| arg.starts_with("--mpv-sub-auto") || arg.starts_with("--sub-auto"));
+            let has_sid = launch_args
+                .iter()
+                .any(|arg| arg.starts_with("--mpv-sid") || arg.starts_with("--sid"));
             full_args.push("--no-stdin".to_string());
             if let Some(placeholder) = resolve_placeholder_path(state) {
                 full_args.push(placeholder.to_string_lossy().to_string());

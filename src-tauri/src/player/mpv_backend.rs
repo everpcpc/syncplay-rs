@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use super::backend::{PlayerBackend, PlayerKind};
@@ -36,6 +37,7 @@ const MPV_NEWFILE_IGNORE_TIME: Duration = Duration::from_secs(1);
 const STREAM_ADDITIONAL_IGNORE_TIME: Duration = Duration::from_secs(10);
 const PLAYER_ASK_DELAY: Duration = Duration::from_millis(100);
 const MPV_UNRESPONSIVE_THRESHOLD: Duration = Duration::from_secs(60);
+const MPV_SCRIPT_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
 const DO_NOT_RESET_POSITION_THRESHOLD: f64 = 1.0;
 const MPV_INPUT_BACKSLASH_SUBSTITUTE: &str = "＼";
 const MPV_ERROR_MESSAGES_TO_REPEAT: [&str; 4] = [
@@ -227,7 +229,7 @@ impl PlayerBackend for MpvBackend {
     async fn poll_state(&self) -> anyhow::Result<()> {
         let cmd =
             MpvCommand::script_message_to("syncplayintf", "get_paused_and_position", Vec::new());
-        let _ = self.ipc.send_command_async(cmd).await;
+        let _ = timeout(MPV_SCRIPT_MESSAGE_TIMEOUT, self.ipc.send_command_async(cmd)).await;
         if let Err(err) = self.ipc.refresh_state().await {
             warn!("Failed to refresh mpv properties: {}", err);
         }
