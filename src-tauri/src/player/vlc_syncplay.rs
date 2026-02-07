@@ -136,26 +136,6 @@ impl VlcSyncplayBackend {
         self.connection.send_line("get-filename").await?;
         Ok(())
     }
-
-    fn update_estimated_position(&self) {
-        let paused = self.state.lock().paused.unwrap_or(true);
-        if paused {
-            return;
-        }
-        let last_update = *self.last_position_update.lock();
-        let Some(last_update) = last_update else {
-            return;
-        };
-        let diff = last_update.elapsed().as_secs_f64();
-        if diff > 0.1 {
-            if let Some(position) = self.state.lock().position {
-                self.state.lock().position = Some(position + diff);
-            }
-            if diff > VLC_LATENCY_ERROR_THRESHOLD {
-                warn!("VLC position update delayed: {}s", diff);
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -169,14 +149,24 @@ impl PlayerBackend for VlcSyncplayBackend {
     }
 
     fn get_state(&self) -> PlayerState {
-        self.update_estimated_position();
         let mut snapshot = self.state.lock().clone();
+        let base_position = snapshot.position;
+        let last_update = *self.last_position_update.lock();
         if snapshot.paused == Some(false) {
-            if let (Some(duration), Some(position), Some(last_update)) = (
-                snapshot.duration,
-                snapshot.position,
-                *self.last_position_update.lock(),
-            ) {
+            if let (Some(position), Some(last_update)) = (snapshot.position, last_update) {
+                let diff = last_update.elapsed().as_secs_f64();
+                if diff > 0.1 {
+                    if diff > VLC_LATENCY_ERROR_THRESHOLD {
+                        warn!("VLC position update delayed: {}s", diff);
+                    }
+                    snapshot.position = Some(position + diff);
+                }
+            }
+        }
+        if snapshot.paused == Some(false) {
+            if let (Some(duration), Some(position), Some(last_update)) =
+                (snapshot.duration, base_position, last_update)
+            {
                 if duration > 10.0
                     && duration - position < 2.0
                     && last_update.elapsed().as_secs_f64() > VLC_LATENCY_ERROR_THRESHOLD
@@ -196,6 +186,7 @@ impl PlayerBackend for VlcSyncplayBackend {
     }
 
     async fn set_position(&self, position: f64) -> anyhow::Result<()> {
+        *self.last_position_update.lock() = Some(Instant::now());
         self.connection
             .send_line(&format!("set-position: {}", position))
             .await
@@ -203,6 +194,10 @@ impl PlayerBackend for VlcSyncplayBackend {
 
     async fn set_paused(&self, paused: bool) -> anyhow::Result<()> {
         let target = if paused { "paused" } else { "playing" };
+        if !paused {
+            *self.last_position_update.lock() = Some(Instant::now());
+        }
+        self.state.lock().paused = Some(paused);
         self.connection
             .send_line(&format!("set-playstate: {}", target))
             .await
@@ -287,14 +282,9 @@ async fn handle_line(
     let (command, argument) = parse_line(line);
     match command.as_str() {
         "playstate" => {
-            let paused = match argument.as_str() {
-                "playing" => Some(false),
-                "paused" | "stopped" => Some(true),
-                "no-input" => Some(true),
-                _ => None,
-            };
-            if paused.is_some() {
-                state.lock().paused = paused;
+            if !argument.is_empty() {
+                let paused = argument != "playing";
+                state.lock().paused = Some(paused);
             }
         }
         "position" => {
