@@ -6,12 +6,16 @@ use crate::app_state::{
 };
 use crate::commands::playlist::apply_playlist_index_from_server;
 use crate::config::{save_config, ServerConfig};
+use crate::client::sync::{
+    FASTFORWARD_BEHIND_THRESHOLD, FASTFORWARD_EXTRA_TIME, FASTFORWARD_RESET_THRESHOLD,
+};
 use crate::network::connection::Connection;
 use crate::network::messages::{
     ClientFeatures, ControllerAuth, HelloMessage, IgnoringInfo, NewControlledRoom, PingInfo,
     PlayState, ProtocolMessage, RoomInfo, SetMessage, StateMessage, TLSMessage, UserUpdate,
 };
 use crate::network::tls::create_tls_connector;
+use crate::player::backend::PlayerBackend;
 use crate::player::controller::{
     ensure_player_connected, load_media_by_name, load_placeholder_if_empty, stop_player,
 };
@@ -45,6 +49,8 @@ const FALLBACK_MAX_CHAT_MESSAGE_LENGTH: usize = 50;
 const FALLBACK_MAX_USERNAME_LENGTH: usize = 16;
 const FALLBACK_MAX_ROOM_NAME_LENGTH: usize = 35;
 const FALLBACK_MAX_FILENAME_LENGTH: usize = 250;
+const IGNORE_SEEK_AFTER_REWIND_SECONDS: f64 = 1.0;
+const IGNORE_SEEK_AFTER_REWIND_POSITION_THRESHOLD: f64 = 5.0;
 
 fn update_server_features(
     state: &Arc<AppState>,
@@ -610,7 +616,34 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
     }
 }
 
+fn should_ignore_seek_after_rewind(state: &Arc<AppState>, position: f64) -> bool {
+    let guard = state.last_rewind_time.lock();
+    let Some(last_rewind) = guard.as_ref() else {
+        return false;
+    };
+    last_rewind.elapsed().as_secs_f64() < IGNORE_SEEK_AFTER_REWIND_SECONDS
+        && position > IGNORE_SEEK_AFTER_REWIND_POSITION_THRESHOLD
+}
+
+async fn try_set_position(
+    state: &Arc<AppState>,
+    player: &Arc<dyn PlayerBackend>,
+    position: f64,
+    context: &str,
+) -> bool {
+    if should_ignore_seek_after_rewind(state, position) {
+        tracing::debug!("Ignored seek to {} after rewind ({})", position, context);
+        return false;
+    }
+    if let Err(e) = player.set_position(position).await {
+        tracing::warn!("Failed to set position ({}): {}", context, e);
+        return false;
+    }
+    true
+}
+
 async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, message_age: f64) {
+    let had_last_global = state.last_global_update.lock().is_some();
     *state.last_global_update.lock() = Some(std::time::Instant::now());
     let adjusted_global_position = if !playstate.paused {
         playstate.position + message_age
@@ -652,121 +685,144 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     let do_seek = playstate.do_seek.unwrap_or(false);
     let pause_changed =
         playstate.paused != previous_global.paused || playstate.paused != local_paused;
+    let diff = local_position - adjusted_global_position;
     let mut made_change_on_player = false;
 
+    if !had_last_global && state.client_state.get_file().is_some() {
+        if try_set_position(state, &player, adjusted_global_position, "init").await {
+            made_change_on_player = true;
+        }
+        if let Err(e) = player.set_paused(playstate.paused).await {
+            tracing::warn!("Failed to set paused on init: {}", e);
+        } else {
+            made_change_on_player = true;
+        }
+    }
+
     if do_seek {
-        if actor_name != current_username {
-            if let Err(e) = player.set_position(adjusted_global_position).await {
-                tracing::warn!("Failed to seek: {}", e);
-            } else {
+        let from_position = if actor_name == current_username {
+            state
+                .last_seek_from_position
+                .lock()
+                .take()
+                .unwrap_or(local_position)
+        } else {
+            *state.last_seek_from_position.lock() = None;
+            if try_set_position(state, &player, adjusted_global_position, "seek").await {
                 made_change_on_player = true;
             }
-            if adjusted_global_position < local_position {
-                *state.last_rewind_time.lock() = Some(std::time::Instant::now());
-            }
-        }
+            local_position
+        };
         let message = format!(
             "{} jumped from {} to {}",
             actor_name,
-            format_time(local_position),
+            format_time(from_position),
             format_time(adjusted_global_position)
         );
         emit_system_message(state, &message);
         maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
     }
 
-    let mut seek_action = None;
-    let mut slowdown_action = false;
-    let mut reset_speed = false;
-    let slowdown_rate = if do_seek {
-        1.0
-    } else {
-        let (actions, slowdown_rate) = {
-            let mut engine = state.sync_engine.lock();
-            let actions = engine.calculate_sync_actions(crate::client::sync::SyncInputs {
-                local_position,
-                local_paused,
-                global_position: playstate.position,
-                global_paused: playstate.paused,
-                message_age,
-                do_seek: false,
-                allow_fastforward: should_allow_fastforward(state, &config),
-            });
-            let slowdown_rate = engine.slowdown_rate();
-            (actions, slowdown_rate)
-        };
-
-        for action in actions {
-            match action {
-                crate::client::sync::SyncAction::Seek(position) => {
-                    seek_action = Some(position);
-                }
-                crate::client::sync::SyncAction::Slowdown => {
-                    slowdown_action = true;
-                }
-                crate::client::sync::SyncAction::ResetSpeed => {
-                    reset_speed = true;
-                }
-                crate::client::sync::SyncAction::SetPaused(_) => {}
-                crate::client::sync::SyncAction::None => {}
-            }
-        }
-
-        slowdown_rate
-    };
-
-    if let Some(position) = seek_action {
+    if diff > config.user.seek_threshold_rewind && !do_seek && config.user.rewind_on_desync {
         if actor_name != current_username {
-            if let Err(e) = player.set_position(position).await {
-                tracing::warn!("Failed to seek: {}", e);
-            } else {
+            if try_set_position(state, &player, adjusted_global_position, "rewind").await {
                 made_change_on_player = true;
             }
-            if position < local_position {
-                *state.last_rewind_time.lock() = Some(std::time::Instant::now());
-            }
-            let message = if position < local_position {
-                format!("Rewinded due to time difference with {}", actor_name)
-            } else {
-                format!("Fast-forwarded due to time difference with {}", actor_name)
-            };
+            let message = format!("Rewinded due to time difference with {}", actor_name);
             emit_system_message(state, &message);
             maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
         }
     }
 
-    if slowdown_action && player_supports_speed(player_kind) {
-        if actor_name != current_username {
-            if let Err(e) = player.set_speed(slowdown_rate).await {
-                tracing::warn!("Failed to set slowdown: {}", e);
-            } else {
-                made_change_on_player = true;
+    if config.user.fastforward_on_desync && should_allow_fastforward(state, &config) {
+        let mut next_behind_marker = None;
+        let mut fastforward_target = None;
+        if diff < -FASTFORWARD_BEHIND_THRESHOLD && !do_seek {
+            let now = std::time::Instant::now();
+            let start = state.sync_engine.lock().behind_first_detected();
+            match start {
+                None => {
+                    next_behind_marker = Some(Some(now));
+                }
+                Some(start) => {
+                    let duration_behind = now
+                        .checked_duration_since(start)
+                        .unwrap_or_default()
+                        .as_secs_f64();
+                    if duration_behind
+                        > (config.user.seek_threshold_fastforward - FASTFORWARD_BEHIND_THRESHOLD)
+                        && diff < -config.user.seek_threshold_fastforward
+                    {
+                        fastforward_target =
+                            Some(adjusted_global_position + FASTFORWARD_EXTRA_TIME);
+                        next_behind_marker = Some(Some(
+                            now + Duration::from_secs_f64(FASTFORWARD_RESET_THRESHOLD),
+                        ));
+                    }
+                }
             }
-            let message = format!("Slowing down due to time difference with {}", actor_name);
-            emit_system_message(state, &message);
-            maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
         } else {
-            state.sync_engine.lock().reset_slowdown();
+            next_behind_marker = Some(None);
+        }
+
+        if let Some(position) = fastforward_target {
+            if actor_name != current_username {
+                if try_set_position(state, &player, position, "fastforward").await {
+                    made_change_on_player = true;
+                }
+                let message = format!("Fast-forwarded due to time difference with {}", actor_name);
+                emit_system_message(state, &message);
+                maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+            }
+        }
+
+        if let Some(marker) = next_behind_marker {
+            state.sync_engine.lock().set_behind_first_detected(marker);
         }
     }
 
-    if reset_speed && player_supports_speed(player_kind) {
-        if let Err(e) = player.set_speed(1.0).await {
-            tracing::warn!("Failed to reset speed: {}", e);
-        } else {
-            made_change_on_player = true;
+    if player_supports_speed(player_kind)
+        && !do_seek
+        && !playstate.paused
+        && config.user.slow_on_desync
+    {
+        let slowdown_active = state.sync_engine.lock().is_slowdown_active();
+        if diff > config.user.slowdown_threshold && !slowdown_active {
+            if actor_name != current_username {
+                if let Err(e) = player.set_speed(config.user.slowdown_rate).await {
+                    tracing::warn!("Failed to set slowdown: {}", e);
+                } else {
+                    made_change_on_player = true;
+                }
+                state.sync_engine.lock().set_slowdown_active(true);
+                let message = format!("Slowing down due to time difference with {}", actor_name);
+                emit_system_message(state, &message);
+                maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
+            }
+        } else if slowdown_active && diff < config.user.slowdown_reset_threshold {
+            if let Err(e) = player.set_speed(1.0).await {
+                tracing::warn!("Failed to reset speed: {}", e);
+            } else {
+                made_change_on_player = true;
+            }
+            state.sync_engine.lock().set_slowdown_active(false);
+            let message = "Reverting speed back to normal".to_string();
+            emit_system_message(state, &message);
+            maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
         }
-        let message = "Reverting speed back to normal".to_string();
-        emit_system_message(state, &message);
-        maybe_show_osd(state, &config, &message, config.user.show_slowdown_osd);
     }
 
     if pause_changed {
         if playstate.paused {
             if actor_name != current_username {
-                if let Err(e) = player.set_position(adjusted_global_position).await {
-                    tracing::warn!("Failed to sync position on pause: {}", e);
-                } else {
+                if try_set_position(
+                    state,
+                    &player,
+                    adjusted_global_position,
+                    "pause-sync",
+                )
+                .await
+                {
                     made_change_on_player = true;
                 }
             }
@@ -783,9 +839,6 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
             emit_system_message(state, &message);
             maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
         } else {
-            if actor_name != current_username {
-                *state.suppress_unpause_check.lock() = true;
-            }
             if let Err(e) = player.set_paused(false).await {
                 tracing::warn!("Failed to set paused: {}", e);
             } else {
