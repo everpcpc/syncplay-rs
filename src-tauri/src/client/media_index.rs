@@ -33,6 +33,23 @@ impl MediaIndexCache {
         self.by_hash.entry(hash).or_default().push(path);
     }
 
+    fn insert_override(&mut self, filename: &str, path: PathBuf) {
+        fn insert_front(vec: &mut Vec<PathBuf>, path: &PathBuf) {
+            if let Some(existing) = vec.iter().position(|entry| entry == path) {
+                vec.remove(existing);
+            }
+            vec.insert(0, path.clone());
+        }
+
+        let lower = filename.to_ascii_lowercase();
+        let stripped = strip_filename(filename, false);
+        let hash = hash_filename(filename, false);
+
+        insert_front(self.by_lower.entry(lower).or_default(), &path);
+        insert_front(self.by_stripped.entry(stripped).or_default(), &path);
+        insert_front(self.by_hash.entry(hash).or_default(), &path);
+    }
+
     fn resolve(&self, filename: &str) -> Option<PathBuf> {
         if let Some(path) = self.resolve_by_name(filename) {
             return Some(path);
@@ -115,6 +132,10 @@ impl MediaIndex {
             return Some(path.to_path_buf());
         }
         self.cache.read().resolve(filename)
+    }
+
+    pub fn add_override_path(&self, filename: &str, path: PathBuf) {
+        self.cache.write().insert_override(filename, path);
     }
 
     pub fn is_available(&self, filename: &str) -> bool {

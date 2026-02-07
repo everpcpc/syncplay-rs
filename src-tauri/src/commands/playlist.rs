@@ -5,10 +5,10 @@ use crate::config::SyncplayConfig;
 use crate::network::messages::{PlayState, StateMessage};
 use crate::network::messages::{PlaylistChange, PlaylistIndexUpdate, ProtocolMessage, SetMessage};
 use crate::player::controller::{load_media_by_name, resolve_media_path};
-use crate::utils::is_music_file;
-use crate::utils::is_url;
+use crate::utils::{is_music_file, is_url};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
 
@@ -30,7 +30,11 @@ pub async fn update_playlist(
     match action.as_str() {
         "add" => {
             let file = filename.ok_or_else(|| "Filename required for add action".to_string())?;
-            new_items.push(file);
+            let (normalized, override_path) = normalize_playlist_entry(&file);
+            if let Some(path) = override_path {
+                state.media_index.add_override_path(&normalized, path);
+            }
+            new_items.push(normalized);
             apply_playlist_change_local(state.inner(), new_items, false)?;
         }
         "remove" => {
@@ -320,6 +324,19 @@ fn apply_playlist_change_local(
     }
 
     Ok(())
+}
+
+fn normalize_playlist_entry(entry: &str) -> (String, Option<PathBuf>) {
+    if is_url(entry) {
+        return (entry.to_string(), None);
+    }
+    let path = Path::new(entry);
+    if path.is_absolute() && path.is_file() {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            return (name.to_string(), Some(path.to_path_buf()));
+        }
+    }
+    (entry.to_string(), None)
 }
 
 fn next_index(state: &Arc<AppState>, config: &SyncplayConfig) -> Result<usize, String> {
