@@ -4,11 +4,11 @@ use crate::app_state::{
     AppState, ConnectionSnapshot, ConnectionStatusEvent, ServerFeatures, WarningTimerState,
     WarningTimers,
 };
-use crate::commands::playlist::apply_playlist_index_from_server;
-use crate::config::{save_config, ServerConfig};
 use crate::client::sync::{
     FASTFORWARD_BEHIND_THRESHOLD, FASTFORWARD_EXTRA_TIME, FASTFORWARD_RESET_THRESHOLD,
 };
+use crate::commands::playlist::apply_playlist_index_from_server;
+use crate::config::{save_config, ServerConfig};
 use crate::network::connection::Connection;
 use crate::network::messages::{
     ClientFeatures, ControllerAuth, HelloMessage, IgnoringInfo, NewControlledRoom, PingInfo,
@@ -815,14 +815,7 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
     if pause_changed {
         if playstate.paused {
             if actor_name != current_username {
-                if try_set_position(
-                    state,
-                    &player,
-                    adjusted_global_position,
-                    "pause-sync",
-                )
-                .await
-                {
+                if try_set_position(state, &player, adjusted_global_position, "pause-sync").await {
                     made_change_on_player = true;
                 }
             }
