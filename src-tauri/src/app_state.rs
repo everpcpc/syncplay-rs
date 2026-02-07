@@ -36,8 +36,6 @@ pub struct AppState {
     pub config: Arc<Mutex<SyncplayConfig>>,
     /// Suppress next file update for server-driven loads
     pub suppress_next_file_update: Arc<Mutex<bool>>,
-    /// Suppress unpause checks for remote updates
-    pub suppress_unpause_check: Arc<Mutex<bool>>,
     /// Last hello payload (for TLS re-handshake)
     pub last_hello: Arc<Mutex<Option<HelloMessage>>>,
     /// Whether hello has been sent for the current connection
@@ -62,6 +60,8 @@ pub struct AppState {
     pub server_features: Arc<Mutex<ServerFeatures>>,
     /// Last rewind timestamp
     pub last_rewind_time: Arc<Mutex<Option<Instant>>>,
+    /// Last local seek origin position for notifications
+    pub last_seek_from_position: Arc<Mutex<Option<f64>>>,
     /// Last playlist advance timestamp
     pub last_advance_time: Arc<Mutex<Option<Instant>>>,
     /// Last time a file update was sent/received
@@ -157,7 +157,6 @@ impl AppState {
             sync_engine: Arc::new(Mutex::new(SyncEngine::new())),
             config: Arc::new(Mutex::new(SyncplayConfig::default())),
             suppress_next_file_update: Arc::new(Mutex::new(false)),
-            suppress_unpause_check: Arc::new(Mutex::new(false)),
             last_hello: Arc::new(Mutex::new(None)),
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
@@ -170,6 +169,7 @@ impl AppState {
             ignoring_on_the_fly: Arc::new(Mutex::new(IgnoringOnTheFlyState::default())),
             server_features: Arc::new(Mutex::new(ServerFeatures::default())),
             last_rewind_time: Arc::new(Mutex::new(None)),
+            last_seek_from_position: Arc::new(Mutex::new(None)),
             last_advance_time: Arc::new(Mutex::new(None)),
             last_updated_file_time: Arc::new(Mutex::new(None)),
             last_paused_on_leave_time: Arc::new(Mutex::new(None)),
@@ -237,7 +237,6 @@ impl Default for AppState {
             sync_engine: Arc::new(Mutex::new(SyncEngine::new())),
             config: Arc::new(Mutex::new(SyncplayConfig::default())),
             suppress_next_file_update: Arc::new(Mutex::new(false)),
-            suppress_unpause_check: Arc::new(Mutex::new(false)),
             last_hello: Arc::new(Mutex::new(None)),
             hello_sent: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
@@ -250,6 +249,7 @@ impl Default for AppState {
             ignoring_on_the_fly: Arc::new(Mutex::new(IgnoringOnTheFlyState::default())),
             server_features: Arc::new(Mutex::new(ServerFeatures::default())),
             last_rewind_time: Arc::new(Mutex::new(None)),
+            last_seek_from_position: Arc::new(Mutex::new(None)),
             last_advance_time: Arc::new(Mutex::new(None)),
             last_updated_file_time: Arc::new(Mutex::new(None)),
             last_paused_on_leave_time: Arc::new(Mutex::new(None)),

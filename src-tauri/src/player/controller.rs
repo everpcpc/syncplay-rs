@@ -312,25 +312,19 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                 (player_state.position, player_state.paused)
             {
                 let global = state.client_state.get_global_state();
-                let (mut local_pause_change, local_seeked, previous_state) = {
+                let (mut local_pause_change, local_seeked) = {
                     let mut local_state = state.local_playback_state.lock();
-                    let previous_state = local_state.current();
                     let (pause_change, seeked) = local_state.update_from_player(
                         position,
                         paused_value,
                         global.position,
                         global.paused,
                     );
-                    (pause_change, seeked, previous_state)
+                    (pause_change, seeked)
                 };
                 if local_seeked {
-                    if let Some((prev_position, _)) = previous_state {
-                        if position < prev_position {
-                            *state.last_rewind_time.lock() = Some(Instant::now());
-                        }
-                    }
+                    *state.last_seek_from_position.lock() = Some(global.position);
                 }
-
                 let mut paused = paused_value;
                 let mut skip_ready_toggle = false;
                 if local_pause_change && paused {
@@ -341,19 +335,6 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                     if near_end {
                         skip_ready_toggle = true;
                         let _ = advance_playlist_check(&state, position).await;
-                    }
-                }
-                if local_pause_change && !paused {
-                    let suppressed = {
-                        let mut guard = state.suppress_unpause_check.lock();
-                        let suppressed = *guard;
-                        if suppressed {
-                            *guard = false;
-                        }
-                        suppressed
-                    };
-                    if suppressed {
-                        local_pause_change = false;
                     }
                 }
                 if local_pause_change

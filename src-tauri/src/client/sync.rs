@@ -1,9 +1,9 @@
 use crate::config::UserPreferences;
 use tracing::{debug, info};
 
-const FASTFORWARD_EXTRA_TIME: f64 = 0.25;
-const FASTFORWARD_RESET_THRESHOLD: f64 = 3.0;
-const FASTFORWARD_BEHIND_THRESHOLD: f64 = 1.75;
+pub(crate) const FASTFORWARD_EXTRA_TIME: f64 = 0.25;
+pub(crate) const FASTFORWARD_RESET_THRESHOLD: f64 = 3.0;
+pub(crate) const FASTFORWARD_BEHIND_THRESHOLD: f64 = 1.75;
 
 /// Synchronization action to take
 #[derive(Debug, Clone, PartialEq)]
@@ -67,9 +67,21 @@ impl SyncEngine {
         self.slowdown_threshold = prefs.slowdown_threshold;
         self.slowdown_reset_threshold = prefs.slowdown_reset_threshold;
         self.slowdown_rate = prefs.slowdown_rate;
-        self.slow_on_desync = prefs.slow_on_desync && !prefs.dont_slow_down_with_me;
+        self.slow_on_desync = prefs.slow_on_desync;
         self.rewind_on_desync = prefs.rewind_on_desync;
         self.fastforward_on_desync = prefs.fastforward_on_desync;
+    }
+
+    pub fn behind_first_detected(&self) -> Option<std::time::Instant> {
+        self.behind_first_detected
+    }
+
+    pub fn set_behind_first_detected(&mut self, value: Option<std::time::Instant>) {
+        self.behind_first_detected = value;
+    }
+
+    pub fn set_slowdown_active(&mut self, active: bool) {
+        self.slowdown_active = active;
     }
 
     pub fn slowdown_rate(&self) -> f64 {
