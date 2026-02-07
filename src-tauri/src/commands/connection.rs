@@ -723,15 +723,17 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
         maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
     }
 
-    if diff > config.user.seek_threshold_rewind && !do_seek && config.user.rewind_on_desync {
-        if actor_name != current_username {
-            if try_set_position(state, &player, adjusted_global_position, "rewind").await {
-                made_change_on_player = true;
-            }
-            let message = format!("Rewinded due to time difference with {}", actor_name);
-            emit_system_message(state, &message);
-            maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
+    if diff > config.user.seek_threshold_rewind
+        && !do_seek
+        && config.user.rewind_on_desync
+        && actor_name != current_username
+    {
+        if try_set_position(state, &player, adjusted_global_position, "rewind").await {
+            made_change_on_player = true;
         }
+        let message = format!("Rewinded due to time difference with {}", actor_name);
+        emit_system_message(state, &message);
+        maybe_show_osd(state, &config, &message, config.user.show_same_room_osd);
     }
 
     if config.user.fastforward_on_desync && should_allow_fastforward(state, &config) {
@@ -814,10 +816,10 @@ async fn handle_state_update(state: &Arc<AppState>, playstate: PlayState, messag
 
     if pause_changed {
         if playstate.paused {
-            if actor_name != current_username {
-                if try_set_position(state, &player, adjusted_global_position, "pause-sync").await {
-                    made_change_on_player = true;
-                }
+            if actor_name != current_username
+                && try_set_position(state, &player, adjusted_global_position, "pause-sync").await
+            {
+                made_change_on_player = true;
             }
             if let Err(e) = player.set_paused(true).await {
                 tracing::warn!("Failed to set paused: {}", e);
