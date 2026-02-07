@@ -323,14 +323,6 @@ pub fn spawn_player_state_loop(state: Arc<AppState>) {
                     );
                     (pause_change, seeked, previous_state)
                 };
-                if local_seeked {
-                    if let Some((prev_position, _)) = previous_state {
-                        if position < prev_position {
-                            *state.last_rewind_time.lock() = Some(Instant::now());
-                        }
-                    }
-                }
-
                 let mut paused = paused_value;
                 let mut skip_ready_toggle = false;
                 if local_pause_change && paused {
