@@ -683,9 +683,7 @@ fn spawn_event_loop(args: EventLoopArgs) {
                     let parts = split_mpc_fields(&value);
                     if parts.len() >= 5 {
                         let path = parts[3].clone();
-                        let filename = std::path::Path::new(&path)
-                            .file_name()
-                            .map(|name| name.to_string_lossy().to_string());
+                        let filename = mpc_filename_from_path(&path);
                         let duration = parts[4].parse::<f64>().ok();
                         let mut guard = state.lock();
                         guard.path = Some(path);
@@ -723,20 +721,15 @@ fn spawn_event_loop(args: EventLoopArgs) {
 fn split_mpc_fields(input: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
-    let mut chars = input.chars().peekable();
+    let mut previous_is_backslash = false;
 
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\\' => match chars.peek().copied() {
-                Some('|') => {
-                    let _ = chars.next();
-                    current.push('|');
-                }
-                _ => current.push('\\'),
-            },
-            '|' => parts.push(std::mem::take(&mut current)),
-            _ => current.push(ch),
+    for ch in input.chars() {
+        if ch == '|' && !previous_is_backslash {
+            parts.push(std::mem::take(&mut current));
+        } else {
+            current.push(ch);
         }
+        previous_is_backslash = ch == '\\';
     }
 
     if !parts.is_empty() || !current.is_empty() {
@@ -745,9 +738,16 @@ fn split_mpc_fields(input: &str) -> Vec<String> {
     parts
 }
 
+fn mpc_filename_from_path(path: &str) -> Option<String> {
+    path.trim_end_matches(['\\', '/'])
+        .rsplit(['\\', '/'])
+        .find(|segment| !segment.is_empty())
+        .map(|segment| segment.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split_mpc_fields;
+    use super::{mpc_filename_from_path, split_mpc_fields};
 
     #[test]
     fn split_mpc_fields_keeps_windows_path_separators() {
@@ -761,13 +761,13 @@ mod tests {
     }
 
     #[test]
-    fn split_mpc_fields_unescapes_pipe_and_keeps_unc_path() {
+    fn split_mpc_fields_keeps_escaped_pipe_sequence() {
         let input = r"0|1|Name\|Part|\\server\share\Clip.mkv|321";
         let parts = split_mpc_fields(input);
 
         assert_eq!(
             parts.get(2).map(std::string::String::as_str),
-            Some("Name|Part")
+            Some(r"Name\|Part")
         );
         assert_eq!(
             parts.get(3).map(std::string::String::as_str),
@@ -788,6 +788,26 @@ mod tests {
                 "3".to_string(),
                 "".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn mpc_filename_from_path_extracts_windows_basename() {
+        assert_eq!(
+            mpc_filename_from_path(r"C:\Videos\Example.mkv").as_deref(),
+            Some("Example.mkv")
+        );
+    }
+
+    #[test]
+    fn mpc_filename_from_path_handles_doubled_separators() {
+        assert_eq!(
+            mpc_filename_from_path(r"C:\\Videos\\Example.mkv").as_deref(),
+            Some("Example.mkv")
+        );
+        assert_eq!(
+            mpc_filename_from_path(r"\\server\share\Clip.mkv").as_deref(),
+            Some("Clip.mkv")
         );
     }
 }
