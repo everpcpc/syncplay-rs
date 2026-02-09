@@ -723,28 +723,73 @@ fn spawn_event_loop(args: EventLoopArgs) {
 fn split_mpc_fields(input: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
-    let mut escape = false;
-    for ch in input.chars() {
-        if escape {
-            current.push(ch);
-            escape = false;
-            continue;
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => match chars.peek().copied() {
+                Some('|') => {
+                    let _ = chars.next();
+                    current.push('|');
+                }
+                _ => current.push('\\'),
+            },
+            '|' => parts.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
         }
-        if ch == '\\' {
-            escape = true;
-            continue;
-        }
-        if ch == '|' {
-            parts.push(current.clone());
-            current.clear();
-            continue;
-        }
-        current.push(ch);
     }
-    if !current.is_empty() {
+
+    if !parts.is_empty() || !current.is_empty() {
         parts.push(current);
     }
     parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_mpc_fields;
+
+    #[test]
+    fn split_mpc_fields_keeps_windows_path_separators() {
+        let input = "0|1|Movie|C:\\Videos\\Example.mkv|123.4";
+        let parts = split_mpc_fields(input);
+
+        assert_eq!(
+            parts.get(3).map(std::string::String::as_str),
+            Some(r"C:\Videos\Example.mkv")
+        );
+    }
+
+    #[test]
+    fn split_mpc_fields_unescapes_pipe_and_keeps_unc_path() {
+        let input = r"0|1|Name\|Part|\\server\share\Clip.mkv|321";
+        let parts = split_mpc_fields(input);
+
+        assert_eq!(
+            parts.get(2).map(std::string::String::as_str),
+            Some("Name|Part")
+        );
+        assert_eq!(
+            parts.get(3).map(std::string::String::as_str),
+            Some(r"\\server\share\Clip.mkv")
+        );
+    }
+
+    #[test]
+    fn split_mpc_fields_keeps_trailing_empty_field() {
+        let parts = split_mpc_fields("0|1|2|3|");
+
+        assert_eq!(
+            parts,
+            vec![
+                "0".to_string(),
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "".to_string()
+            ]
+        );
+    }
 }
 
 fn meets_min_version(version: &str, min: &str) -> bool {
