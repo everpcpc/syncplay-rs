@@ -144,6 +144,14 @@ pub struct UserPreferences {
     pub show_playlist: bool,
     #[serde(default = "default_side_panel_layout")]
     pub side_panel_layout: String,
+    #[serde(default)]
+    pub side_column_width: Option<u32>,
+    #[serde(default)]
+    pub side_panel_primary_size: Option<u32>,
+    #[serde(default)]
+    pub window_width: Option<u32>,
+    #[serde(default)]
+    pub window_height: Option<u32>,
     pub auto_connect: bool,
     pub force_gui_prompt: bool,
     pub check_for_updates_automatically: Option<bool>,
@@ -251,6 +259,10 @@ impl Default for UserPreferences {
             loop_single_files: false,
             show_playlist: true,
             side_panel_layout: default_side_panel_layout(),
+            side_column_width: None,
+            side_panel_primary_size: None,
+            window_width: None,
+            window_height: None,
             auto_connect: false,
             force_gui_prompt: true,
             check_for_updates_automatically: None,

@@ -88,6 +88,10 @@ export interface UserPreferences {
   loop_single_files: boolean;
   show_playlist: boolean;
   side_panel_layout: "rows" | "columns";
+  side_column_width?: number;
+  side_panel_primary_size?: number;
+  window_width?: number;
+  window_height?: number;
   auto_connect: boolean;
   force_gui_prompt: boolean;
   check_for_updates_automatically: boolean | null;
