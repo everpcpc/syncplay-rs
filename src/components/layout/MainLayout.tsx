@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UserList } from "../users/UserList";
 import { ChatPanel } from "../chat/ChatPanel";
 import { PlayerStatus } from "../player/PlayerStatus";
@@ -18,6 +18,7 @@ import {
   LuZap,
 } from "react-icons/lu";
 import { getVersion } from "@tauri-apps/api/app";
+import { PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWindowDrag } from "../../hooks/useWindowDrag";
 import { PlaylistPanel } from "../playlist/PlaylistPanel";
@@ -36,7 +37,14 @@ import {
   normalizeTransparency,
 } from "../../services/theme";
 import { checkForUpdates, shouldAutoCheckUpdates } from "../../services/updater";
-import { SyncplayConfig } from "../../types/config";
+import { SyncplayConfig, UserPreferences } from "../../types/config";
+
+type UiLayoutPreferencePatch = Partial<
+  Pick<
+    UserPreferences,
+    "side_column_width" | "side_panel_primary_size" | "window_width" | "window_height"
+  >
+>;
 
 export function MainLayout() {
   const appWindow = isTauri() ? getCurrentWindow() : null;
@@ -66,6 +74,11 @@ export function MainLayout() {
   const initializedRef = useRef(false);
   const autoUpdateCheckedRef = useRef(false);
   const showPlaylistRef = useRef<boolean | null>(null);
+  const pendingUiLayoutPatchRef = useRef<UiLayoutPreferencePatch | null>(null);
+  const uiLayoutPersistTimerRef = useRef<number | null>(null);
+  const uiLayoutPersistingRef = useRef(false);
+  const uiLayoutLoadedRef = useRef(false);
+  const [windowSizeTrackingReady, setWindowSizeTrackingReady] = useState(false);
   const RESIZER_SIZE = 12;
   const GAP_SIZE = 12;
   const MAIN_MIN_WIDTH = 360;
@@ -167,6 +180,71 @@ export function MainLayout() {
     initFromConfig();
   }, [connection.connected, addNotification, setConfig]);
 
+  const flushUiLayoutPatch = useCallback(async () => {
+    if (uiLayoutPersistingRef.current) {
+      return;
+    }
+
+    const patch = pendingUiLayoutPatchRef.current;
+    if (!patch) {
+      return;
+    }
+
+    pendingUiLayoutPatchRef.current = null;
+    uiLayoutPersistingRef.current = true;
+
+    try {
+      const currentConfig = await invoke<SyncplayConfig>("get_config");
+      const nextConfig: SyncplayConfig = {
+        ...currentConfig,
+        user: { ...currentConfig.user, ...patch },
+      };
+      await invoke("update_config", { config: nextConfig });
+      setConfig(nextConfig);
+    } catch (error) {
+      console.warn("Failed to persist UI layout preferences", error);
+    } finally {
+      uiLayoutPersistingRef.current = false;
+      if (pendingUiLayoutPatchRef.current) {
+        uiLayoutPersistTimerRef.current = window.setTimeout(() => {
+          uiLayoutPersistTimerRef.current = null;
+          void flushUiLayoutPatch();
+        }, 200);
+      }
+    }
+  }, [setConfig]);
+
+  const queueUiLayoutPatch = useCallback(
+    (patch: UiLayoutPreferencePatch, debounceMs = 300) => {
+      pendingUiLayoutPatchRef.current = {
+        ...(pendingUiLayoutPatchRef.current ?? {}),
+        ...patch,
+      };
+
+      if (uiLayoutPersistTimerRef.current !== null) {
+        window.clearTimeout(uiLayoutPersistTimerRef.current);
+      }
+
+      uiLayoutPersistTimerRef.current = window.setTimeout(() => {
+        uiLayoutPersistTimerRef.current = null;
+        void flushUiLayoutPatch();
+      }, debounceMs);
+    },
+    [flushUiLayoutPatch]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (uiLayoutPersistTimerRef.current !== null) {
+        window.clearTimeout(uiLayoutPersistTimerRef.current);
+        uiLayoutPersistTimerRef.current = null;
+      }
+      if (pendingUiLayoutPatchRef.current) {
+        void flushUiLayoutPatch();
+      }
+    };
+  }, [flushUiLayoutPatch]);
+
   useEffect(() => {
     if (!config) return;
     if (showPlaylistRef.current !== config.user.show_playlist) {
@@ -182,7 +260,74 @@ export function MainLayout() {
     const normalizedTransparency = normalizeTransparency(config.user.transparency_mode);
     setTransparencyMode(normalizedTransparency);
     applyTransparency(normalizedTransparency);
+    if (!uiLayoutLoadedRef.current) {
+      uiLayoutLoadedRef.current = true;
+      if (typeof config.user.side_column_width === "number" && config.user.side_column_width > 0) {
+        setSideWidth(config.user.side_column_width);
+      }
+      if (
+        typeof config.user.side_panel_primary_size === "number" &&
+        config.user.side_panel_primary_size > 0
+      ) {
+        setSidePanelSize(config.user.side_panel_primary_size);
+      }
+    }
   }, [config]);
+
+  useEffect(() => {
+    if (!appWindow || !config || windowSizeTrackingReady) return;
+
+    const restoreWindowSize = async () => {
+      try {
+        const width = config.user.window_width;
+        const height = config.user.window_height;
+        if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
+          await appWindow.setSize(new PhysicalSize(width, height));
+        }
+      } catch (error) {
+        console.warn("Failed to restore window size", error);
+      } finally {
+        setWindowSizeTrackingReady(true);
+      }
+    };
+
+    void restoreWindowSize();
+  }, [appWindow, config, windowSizeTrackingReady]);
+
+  useEffect(() => {
+    if (!appWindow || !windowSizeTrackingReady) return;
+
+    let mounted = true;
+    let unlisten: (() => void) | null = null;
+
+    const setupResizeListener = async () => {
+      try {
+        unlisten = await appWindow.onResized(({ payload: size }) => {
+          if (!mounted) return;
+          const width = Math.round(size.width);
+          const height = Math.round(size.height);
+          queueUiLayoutPatch(
+            {
+              window_width: width,
+              window_height: height,
+            },
+            450
+          );
+        });
+      } catch (error) {
+        console.warn("Failed to listen for window resize", error);
+      }
+    };
+
+    void setupResizeListener();
+
+    return () => {
+      mounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [appWindow, queueUiLayoutPatch, windowSizeTrackingReady]);
 
   useEffect(() => {
     if (!layoutRef.current) return;
@@ -373,6 +518,7 @@ export function MainLayout() {
     event.preventDefault();
     const startX = event.clientX;
     const startSideWidth = sideWidth;
+    let latestWidth = startSideWidth;
     const rect = layoutRef.current.getBoundingClientRect();
     const min = SIDE_MIN_WIDTH;
     const max = Math.max(min, rect.width - MAIN_MIN_WIDTH - GAP_SIZE);
@@ -380,12 +526,19 @@ export function MainLayout() {
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
       const nextWidth = clampValue(startSideWidth - delta, min, max);
+      latestWidth = nextWidth;
       setSideWidth(nextWidth);
     };
 
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      queueUiLayoutPatch(
+        {
+          side_column_width: Math.round(latestWidth),
+        },
+        120
+      );
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -398,6 +551,7 @@ export function MainLayout() {
     const isRows = sideLayout === "rows";
     const startOffset = isRows ? event.clientY : event.clientX;
     const startSize = sidePanelPrimarySize;
+    let latestSize = startSize;
     const rect = sidePanelsRef.current.getBoundingClientRect();
     const total = isRows ? rect.height : rect.width;
     const min = SIDE_PANEL_MIN;
@@ -407,12 +561,19 @@ export function MainLayout() {
       const currentOffset = isRows ? moveEvent.clientY : moveEvent.clientX;
       const delta = currentOffset - startOffset;
       const nextSize = clampValue(startSize + delta, min, max);
+      latestSize = nextSize;
       setSidePanelSize(nextSize);
     };
 
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      queueUiLayoutPatch(
+        {
+          side_panel_primary_size: Math.round(latestSize),
+        },
+        120
+      );
     };
 
     window.addEventListener("pointermove", handlePointerMove);
