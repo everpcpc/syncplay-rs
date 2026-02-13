@@ -80,7 +80,7 @@ export function MainLayout() {
   const uiLayoutLoadedRef = useRef(false);
   const [windowSizeTrackingReady, setWindowSizeTrackingReady] = useState(false);
   const RESIZER_SIZE = 12;
-  const GAP_SIZE = 12;
+  const GAP_SIZE = 0;
   const MAIN_MIN_WIDTH = 360;
   const SIDE_MIN_WIDTH = 320;
   const SIDE_PANEL_MIN = 200;
@@ -783,6 +783,7 @@ export function MainLayout() {
           <div
             className="app-side-panels"
             ref={sidePanelsRef}
+            data-layout={sideLayout}
             style={{
               gridTemplateColumns:
                 sideLayout === "columns"

@@ -646,7 +646,7 @@ export function PlaylistPanel() {
       {renderDragGhost()}
 
       {/* Header */}
-      <div className="p-4 border-b app-divider app-surface rounded-t-2xl">
+      <div className="p-4 border-b app-divider app-surface">
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
             <LuListMusic className="app-icon app-text-muted" />
@@ -846,7 +846,7 @@ export function PlaylistPanel() {
       </div>
 
       {/* Navigation controls */}
-      <div className="p-4 border-t app-divider app-surface rounded-b-2xl">
+      <div className="p-4 border-t app-divider app-surface">
         <div className="flex items-center justify-between gap-4">
           <div className="flex gap-2">
             <button

@@ -142,9 +142,8 @@
   flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(420px, 560px);
-  gap: 12px;
+  gap: 0;
   padding: 0;
-  min-height: 0;
   position: relative;
   background: transparent;
 }
@@ -176,7 +175,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   background: transparent;
 }
 
@@ -184,7 +183,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 12px;
+  gap: 0;
   position: relative;
   background: transparent;
 }
@@ -256,10 +255,10 @@
 
 .app-header {
   background: var(--app-topbar);
-  border: 1px solid var(--app-border-strong);
-  border-radius: 16px;
+  border: none;
+  border-bottom: 1px solid var(--app-border-strong);
+  border-radius: 0;
   padding: 12px 16px;
-  padding-right: calc(16px + var(--tauri-frame-controls-width, 0px));
   -webkit-user-select: none;
   user-select: none;
   -webkit-app-region: drag;
@@ -283,20 +282,21 @@
 
 .app-sidebar {
   background: var(--app-sidebar);
-  border: 1px solid var(--app-border);
-  border-radius: 16px;
+  border: none;
+  border-radius: 0;
 }
 
 .app-sidebar-right {
   background: var(--app-right-panel);
-  border: 1px solid var(--app-border);
-  border-radius: 16px;
+  border: none;
+  border-radius: 0;
 }
 
 .app-main-panel {
   background: var(--app-panel);
-  border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border: none;
+  border-right: 1px solid var(--app-border);
+  border-radius: 0;
   overflow: hidden;
   min-height: 0;
   flex: 1;
@@ -679,10 +679,7 @@
 }
 
 .app-message {
-  background-color: var(--app-panel-2);
-  border: 1px solid var(--app-border);
-  border-radius: 10px;
-  padding: 8px 12px;
+  padding: 2px 0;
 }
 
 .app-tab {
@@ -745,12 +742,7 @@ body {
 }
 
 body {
-  font-family:
-    "SF Pro Text",
-    "SF Pro Display",
-    -apple-system,
-    "Helvetica Neue",
-    sans-serif;
+  font-family: system-ui, sans-serif;
   color: var(--app-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -776,4 +768,33 @@ body {
 
 .animate-slide-in {
   animation: slide-in 0.3s ease-out;
+}
+
+/* Side-panel divider borders based on layout direction */
+.app-side-panels[data-layout="rows"] > .app-sidebar-right {
+  border-top: 1px solid var(--app-border);
+}
+
+.app-side-panels[data-layout="columns"] > .app-sidebar-right {
+  border-left: 1px solid var(--app-border);
+}
+
+/* Platform-specific: Windows */
+[data-platform="windows"] .app-shell {
+  border-radius: 8px;
+}
+
+[data-platform="windows"] body {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}
+
+/* Solid background only when transparency is off (Windows & Linux) */
+[data-platform="windows"].transparency-off .app-shell,
+[data-platform="linux"].transparency-off .app-shell {
+  background: var(--app-bg-gradient), var(--app-bg);
+}
+
+/* Platform-specific: macOS */
+[data-platform="macos"] body {
+  font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Helvetica Neue", sans-serif;
 }
