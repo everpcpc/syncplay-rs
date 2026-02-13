@@ -781,7 +781,6 @@ body {
 
 /* Platform-specific: Windows */
 [data-platform="windows"] .app-shell {
-  background: var(--app-bg-gradient), var(--app-bg);
   border-radius: 8px;
 }
 
@@ -789,8 +788,9 @@ body {
   font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
 }
 
-/* Platform-specific: Linux */
-[data-platform="linux"] .app-shell {
+/* Solid background only when transparency is off (Windows & Linux) */
+[data-platform="windows"].transparency-off .app-shell,
+[data-platform="linux"].transparency-off .app-shell {
   background: var(--app-bg-gradient), var(--app-bg);
 }
 
