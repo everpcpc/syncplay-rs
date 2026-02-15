@@ -65,15 +65,20 @@ export function ChatPanel() {
               : "Welcome to Syncplay! Connect to a server to get started."}
           </p>
         ) : (
-          messages.map((msg, index) => (
-            <div key={index} className="text-sm app-message">
-              <span className="app-text-muted text-xs">{formatTimestamp(msg.timestamp)}</span>
-              {msg.username && (
-                <span className="app-text-accent font-medium ml-2">{msg.username}:</span>
-              )}
-              <span className={`ml-2 ${getMessageStyle(msg.messageType)}`}>{msg.message}</span>
-            </div>
-          ))
+          messages.map((msg, index) => {
+            // Strip accidental leading/trailing whitespace without affecting internal spacing/newlines.
+            const displayMessage = msg.message.trim();
+
+            return (
+              <div key={index} className="text-sm app-message">
+                <span className="app-text-muted text-xs">{formatTimestamp(msg.timestamp)}</span>
+                {msg.username && (
+                  <span className="app-text-accent font-medium ml-2">{msg.username}:</span>
+                )}
+                <span className={`ml-2 ${getMessageStyle(msg.messageType)}`}>{displayMessage}</span>
+              </div>
+            );
+          })
         )}
         <div ref={messagesEndRef} />
       </div>

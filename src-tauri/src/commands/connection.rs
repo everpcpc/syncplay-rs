@@ -1047,7 +1047,7 @@ fn update_room_warnings(state: &Arc<AppState>, osd_only: bool) {
     let mut timers = state.warning_timers.lock();
 
     if !osd_only && warnings.alone && !last.alone {
-        emit_system_message(state, "You're alone in the room");
+        emit_system_message(state, "You are currently by yourself in the room");
     }
 
     let was_not_ready = last.not_ready.is_some();
@@ -1158,7 +1158,7 @@ fn build_room_warning_message(
     }
 
     if warnings.alone {
-        return Some("You're alone in the room".to_string());
+        return Some("You are currently by yourself in the room".to_string());
     }
 
     let file_diff_message = warnings
