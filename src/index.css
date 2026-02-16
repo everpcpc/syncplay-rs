@@ -811,5 +811,10 @@ body {
 
 /* Platform-specific: macOS */
 [data-platform="macos"] body {
-  font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Helvetica Neue", sans-serif;
+  font-family:
+    "SF Pro Text",
+    "SF Pro Display",
+    -apple-system,
+    "Helvetica Neue",
+    sans-serif;
 }
