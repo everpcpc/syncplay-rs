@@ -40,11 +40,11 @@ export function UserList() {
 
   if (!connection.connected) {
     return (
-      <div className="flex flex-col h-full gap-2">
+      <div className="flex flex-col h-full min-h-0 min-w-0 gap-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <LuUsers className="app-icon app-text-muted" />
-            <span className="text-sm font-semibold">{currentRoom}</span>
+            <span className="text-sm font-semibold truncate">{currentRoom}</span>
           </div>
           <button
             onClick={() => setShowRoomManager(true)}
@@ -120,12 +120,12 @@ export function UserList() {
     : users;
 
   return (
-    <div className="flex flex-col h-full gap-2">
+    <div className="flex flex-col h-full min-h-0 min-w-0 gap-2">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <LuUsers className="app-icon app-text-muted" />
-          <span className="text-sm font-semibold">{currentRoom}</span>
-          <span className="text-xs app-text-muted">({users.length})</span>
+          <span className="text-sm font-semibold truncate">{currentRoom}</span>
+          <span className="text-xs app-text-muted shrink-0">({users.length})</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -146,16 +146,16 @@ export function UserList() {
       </div>
 
       {users.length === 0 ? (
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 min-h-0 overflow-auto">
           <p className="app-text-muted text-sm">No users in room</p>
         </div>
       ) : (
-        <div className="space-y-2 flex-1 overflow-auto pr-1">
+        <div className="space-y-2 flex-1 min-h-0 overflow-auto pr-1">
           {sortedUsers.map((user) => (
             <div key={user.username} className="app-panel-muted rounded-md p-3 text-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{user.username}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium truncate flex-1 min-w-0">{user.username}</span>
                   <span
                     className={`text-[10px] px-2 py-0 rounded-full ${
                       user.isReady ? "app-tag-success" : "app-tag-muted"

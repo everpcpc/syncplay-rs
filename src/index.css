@@ -142,10 +142,14 @@
   flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(420px, 560px);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
   padding: 0;
   position: relative;
   background: transparent;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .drag-strip {
@@ -168,6 +172,7 @@
   min-width: 0;
   display: flex;
   background: transparent;
+  overflow: hidden;
 }
 
 .app-side-column {
@@ -177,15 +182,18 @@
   flex-direction: column;
   gap: 0;
   background: transparent;
+  overflow: hidden;
 }
 
 .app-side-panels {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: grid;
   gap: 0;
   position: relative;
   background: transparent;
+  overflow: hidden;
 }
 
 .app-resizer {
@@ -244,8 +252,14 @@
 
 .app-side-panel {
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.app-side-panel > * {
+  min-height: 0;
+  min-width: 0;
 }
 
 .app-main {
@@ -262,6 +276,7 @@
   -webkit-user-select: none;
   user-select: none;
   -webkit-app-region: drag;
+  flex-shrink: 0;
 }
 
 .app-header-row {
@@ -796,5 +811,10 @@ body {
 
 /* Platform-specific: macOS */
 [data-platform="macos"] body {
-  font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Helvetica Neue", sans-serif;
+  font-family:
+    "SF Pro Text",
+    "SF Pro Display",
+    -apple-system,
+    "Helvetica Neue",
+    sans-serif;
 }

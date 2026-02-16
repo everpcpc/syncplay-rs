@@ -84,6 +84,8 @@ export function MainLayout() {
   const MAIN_MIN_WIDTH = 360;
   const SIDE_MIN_WIDTH = 320;
   const SIDE_PANEL_MIN = 200;
+  const resolveSidePanelMin = (total: number) =>
+    Math.min(SIDE_PANEL_MIN, Math.max(0, Math.floor((total - GAP_SIZE) / 2)));
 
   useEffect(() => {
     let active = true;
@@ -369,8 +371,8 @@ export function MainLayout() {
     const total = sideLayout === "rows" ? sidePanelsSize.height : sidePanelsSize.width;
     if (!total) return;
     setSidePanelSize((previous) => {
-      const min = SIDE_PANEL_MIN;
-      const max = Math.max(min, total - SIDE_PANEL_MIN - GAP_SIZE);
+      const min = resolveSidePanelMin(total);
+      const max = Math.max(min, total - min - GAP_SIZE);
       const fallback = Math.round(total / 2);
       const next = previous ?? fallback;
       return Math.min(Math.max(next, min), max);
@@ -474,9 +476,10 @@ export function MainLayout() {
       : null;
   const sidePanelPrimarySize = showPlaylist && sidePanelSize !== null ? sidePanelSize : null;
   const sidePanelTotal = sideLayout === "rows" ? sidePanelsSize.height : sidePanelsSize.width;
+  const sidePanelMin = resolveSidePanelMin(sidePanelTotal);
   const sidePanelSecondarySize =
     sidePanelPrimarySize !== null && sidePanelTotal
-      ? Math.max(SIDE_PANEL_MIN, sidePanelTotal - sidePanelPrimarySize - GAP_SIZE)
+      ? Math.max(sidePanelMin, sidePanelTotal - sidePanelPrimarySize - GAP_SIZE)
       : null;
   const sidePanelFallback =
     showPlaylist && sideLayout === "columns"
@@ -554,8 +557,8 @@ export function MainLayout() {
     let latestSize = startSize;
     const rect = sidePanelsRef.current.getBoundingClientRect();
     const total = isRows ? rect.height : rect.width;
-    const min = SIDE_PANEL_MIN;
-    const max = Math.max(min, total - SIDE_PANEL_MIN - GAP_SIZE);
+    const min = resolveSidePanelMin(total);
+    const max = Math.max(min, total - min - GAP_SIZE);
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const currentOffset = isRows ? moveEvent.clientY : moveEvent.clientX;
