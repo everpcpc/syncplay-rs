@@ -485,6 +485,13 @@ async fn handle_server_message(message: ProtocolMessage, state: &Arc<AppState>) 
                 state.client_state.clear_users();
                 for (room_name, room_users) in users_by_room {
                     for (username, user_info) in room_users {
+                        if is_placeholder_username(&username) {
+                            tracing::debug!(
+                                "Ignoring placeholder user entry from List in room '{}'",
+                                room_name
+                            );
+                            continue;
+                        }
                         let file = user_info.file.as_ref().and_then(|f| f.name.clone());
                         let file_size = user_info.file.as_ref().and_then(|f| f.size.clone());
                         let file_duration = user_info.file.as_ref().and_then(|f| f.duration);
@@ -1486,44 +1493,48 @@ async fn handle_set_message(state: &Arc<AppState>, set_msg: SetMessage) {
 
     if let Some(ready) = set_msg.ready {
         if let Some(username) = ready.username.clone() {
-            let is_ready = match ready.is_ready {
-                Some(value) => Some(value),
-                None => state
-                    .client_state
-                    .get_user(&username)
-                    .and_then(|user| user.is_ready),
-            };
-
-            if let Some(mut user) = state.client_state.get_user(&username) {
-                user.is_ready = is_ready;
-                state.client_state.add_user(user);
-                users_changed = true;
+            if is_placeholder_username(&username) {
+                tracing::debug!("Ready update contains placeholder username, ignoring");
             } else {
-                state.client_state.add_user(crate::client::state::User {
-                    username: username.clone(),
-                    room: state.client_state.get_room(),
-                    file: None,
-                    file_size: None,
-                    file_duration: None,
-                    is_ready,
-                    is_controller: false,
-                });
-                users_changed = true;
-            }
-
-            if let Some(value) = ready.is_ready {
-                if username == state.client_state.get_username() {
-                    state.client_state.set_ready(value);
-                }
-            }
-
-            if let Some(set_by) = ready.set_by {
-                let message = if ready.is_ready.unwrap_or(false) {
-                    format!("{} was set as ready by {}", username, set_by)
-                } else {
-                    format!("{} was set as not ready by {}", username, set_by)
+                let is_ready = match ready.is_ready {
+                    Some(value) => Some(value),
+                    None => state
+                        .client_state
+                        .get_user(&username)
+                        .and_then(|user| user.is_ready),
                 };
-                emit_system_message(state, &message);
+
+                if let Some(mut user) = state.client_state.get_user(&username) {
+                    user.is_ready = is_ready;
+                    state.client_state.add_user(user);
+                    users_changed = true;
+                } else {
+                    state.client_state.add_user(crate::client::state::User {
+                        username: username.clone(),
+                        room: state.client_state.get_room(),
+                        file: None,
+                        file_size: None,
+                        file_duration: None,
+                        is_ready,
+                        is_controller: false,
+                    });
+                    users_changed = true;
+                }
+
+                if let Some(value) = ready.is_ready {
+                    if username == state.client_state.get_username() {
+                        state.client_state.set_ready(value);
+                    }
+                }
+
+                if let Some(set_by) = ready.set_by {
+                    let message = if ready.is_ready.unwrap_or(false) {
+                        format!("{} was set as ready by {}", username, set_by)
+                    } else {
+                        format!("{} was set as not ready by {}", username, set_by)
+                    };
+                    emit_system_message(state, &message);
+                }
             }
         } else {
             tracing::debug!("Ready state missing username, ignoring");
@@ -2322,6 +2333,11 @@ async fn pause_local_player(state: &Arc<AppState>) {
 }
 
 fn apply_user_update(state: &Arc<AppState>, username: String, update: UserUpdate) -> bool {
+    if is_placeholder_username(&username) {
+        tracing::debug!("User update contains placeholder username, ignoring");
+        return false;
+    }
+
     let config = state.config.lock().clone();
     let current_username = state.client_state.get_username();
     let current_room = state.client_state.get_room();
@@ -2511,10 +2527,15 @@ fn file_differences(
     }
 }
 
+fn is_placeholder_username(username: &str) -> bool {
+    username.trim().is_empty()
+}
+
 fn emit_user_list(state: &Arc<AppState>) {
     let users = state.client_state.get_users();
     let users_json: Vec<serde_json::Value> = users
         .into_iter()
+        .filter(|u| !is_placeholder_username(&u.username))
         .map(|u| {
             serde_json::json!({
                 "username": u.username,

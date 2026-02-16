@@ -336,7 +336,7 @@ pub struct UserInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_ready: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub features: Option<ClientFeatures>,
+    pub features: Option<Value>,
 }
 
 /// Chat message
@@ -404,6 +404,20 @@ mod tests {
                 let update = users.get("pc").expect("pc update missing");
                 let event = update.event.as_ref().expect("event missing");
                 assert_eq!(event.left, Some(true));
+            }
+            _ => panic!("Unexpected message type"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_list_with_array_features() {
+        let json = r#"{"List":{"default":{"ghost":{"position":0,"file":{},"controller":false,"isReady":true,"features":[]}}}}"#;
+        let message: ProtocolMessage = serde_json::from_str(json).unwrap();
+        match message {
+            ProtocolMessage::List { List: Some(rooms) } => {
+                let room = rooms.get("default").expect("default room missing");
+                let ghost = room.get("ghost").expect("ghost user missing");
+                assert!(ghost.features.as_ref().is_some_and(Value::is_array));
             }
             _ => panic!("Unexpected message type"),
         }
